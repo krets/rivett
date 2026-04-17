@@ -1,0 +1,61 @@
+[package]
+name        = "rivett"
+version     = "0.1.0"
+edition     = "2021"
+description = "Rust Image Vetting Tool — fast, keyboard-driven image viewer"
+license     = "MIT"
+
+[[bin]]
+name = "rivett"
+path = "src/main.rs"
+
+# ---------------------------------------------------------------------------
+# Runtime dependencies
+# ---------------------------------------------------------------------------
+
+[dependencies]
+# UI — egui (immediate mode) + eframe host with OpenGL backend.
+# Switch "glow" → "wgpu" here if you prefer the wgpu renderer.
+eframe = { version = "0.28", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+egui = "0.28"
+
+# Image decoding (v1 formats only; keep default-features off for faster builds)
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "bmp",
+    "tiff",
+    "gif",
+] }
+
+# Persistence
+rusqlite    = { version = "0.31", features = ["bundled"] }   # bundles SQLite
+serde       = { version = "1",    features = ["derive"] }
+serde_json  = "1"
+
+# Utilities
+log         = "0.4"
+env_logger  = "0.11"
+uuid        = { version = "1", features = ["v4"] }
+dirs        = "5"   # platform config/data directories
+
+# ---------------------------------------------------------------------------
+# Dev / test dependencies
+# ---------------------------------------------------------------------------
+
+[dev-dependencies]
+tempfile = "3"
+
+# ---------------------------------------------------------------------------
+# Release profile — small, fast binary
+# ---------------------------------------------------------------------------
+
+[profile.release]
+opt-level     = 3
+lto           = true
+strip         = true
+codegen-units = 1
