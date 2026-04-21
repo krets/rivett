@@ -5,7 +5,7 @@ use egui::{CentralPanel, Context, Key, Vec2};
 use std::time::{Duration, Instant};
 
 use crate::db::{Database, ImageRecord};
-use crate::image_loader::{load_image, DirectoryListing};
+use crate::image_loader::{load_image, DirectoryListing, ImageCache};
 use crate::metadata::{read_metadata, MetaEntry};
 use crate::session::SessionState;
 use crate::settings::AppSettings;
@@ -72,6 +72,7 @@ pub struct RivettApp {
     show_info_panel: bool,
     toast:           Option<Toast>,
     delete_confirm:  Option<DeleteConfirm>,
+    image_cache:     ImageCache,
 }
 
 impl RivettApp {
@@ -94,6 +95,7 @@ impl RivettApp {
             toast:           None,
             delete_confirm:  None,
             settings,
+            image_cache:     ImageCache::new(8),
         };
 
         app.db = app.settings.central_db_resolved().and_then(|p| {
@@ -147,11 +149,44 @@ impl RivettApp {
         let rotation = self.session.rotation_for(&path);
         self.current_path = Some(path.clone());
 
-        match load_image(&path) {
-            Ok(img) => self.viewer.load_image(ctx, &img, rotation),
-            Err(e)  => {
-                log::warn!("{e}");
-                self.viewer.clear();
+        // 1. Try cache
+        if let Some(img) = self.image_cache.get(&path) {
+            self.viewer.load_image(ctx, img, rotation);
+        } else {
+            // 2. Load from disk
+            match load_image(&path) {
+                Ok(img) => {
+                    self.image_cache.insert(path.clone(), img.clone());
+                    self.viewer.load_image(ctx, &img, rotation);
+                }
+                Err(e)  => {
+                    log::warn!("{e}");
+                    self.viewer.clear();
+                }
+            }
+        }
+
+        // 3. Prefetch neighbors
+        if let Some(ref listing) = self.listing {
+            // Next
+            let mut i = listing.current_index + 1;
+            while i < listing.files.len() {
+                let p = &listing.files[i];
+                if !self.session.is_ignored(p) {
+                    self.image_cache.prefetch(p.clone());
+                    break;
+                }
+                i += 1;
+            }
+            // Prev
+            let mut i = listing.current_index as i32 - 1;
+            while i >= 0 {
+                let p = &listing.files[i as usize];
+                if !self.session.is_ignored(p) {
+                    self.image_cache.prefetch(p.clone());
+                    break;
+                }
+                i -= 1;
             }
         }
 
@@ -382,13 +417,13 @@ impl RivettApp {
 
         // Zoom via keyboard
         let ctrl = input.modifiers.ctrl;
-        if ctrl && input.key_pressed(Key::Equals) {
+        if ctrl && input.key_pressed(Key::Equals) || input.key_pressed(Key::ArrowUp) {
             let r = ctx.screen_rect();
-            self.viewer.apply_zoom_delta(1.25, None, r);
+            self.viewer.apply_zoom_delta(1.25, Some(r.center()), r);
         }
-        if ctrl && input.key_pressed(Key::Minus) {
+        if ctrl && input.key_pressed(Key::Minus) || input.key_pressed(Key::ArrowDown) {
             let r = ctx.screen_rect();
-            self.viewer.apply_zoom_delta(0.8, None, r);
+            self.viewer.apply_zoom_delta(0.8, Some(r.center()), r);
         }
         if ctrl && input.key_pressed(Key::Num0) {
             self.viewer.zoom_actual_size();
@@ -513,27 +548,37 @@ impl RivettApp {
             });
     }
 
+    fn refresh_listing(&mut self, ctx: &Context) {
+        if let Some(ref mut listing) = self.listing {
+            let sort = self.session.sort_order;
+            if let Err(e) = listing.refresh(sort) {
+                log::warn!("failed to refresh directory listing: {e}");
+            }
+            self.load_current(ctx);
+        }
+    }
+
     // ── Context menu ──────────────────────────────────────────────────────
 
     fn draw_context_menu(&mut self, response: &egui::Response, ctx: &Context) {
         let has_image = self.current_path.is_some();
 
         response.context_menu(|ui| {
-            if ui.add_enabled(has_image, egui::Button::new("Bookmark  [B]")).clicked() {
+            if ui.add_enabled(has_image, egui::Button::new("Bookmark").shortcut_text("B")).clicked() {
                 self.toggle_bookmark();
                 ui.close_menu();
             }
 
             ui.menu_button("Set rating", |ui| {
-                for (label, r) in [
-                    ("★ 1",       Some(1u8)),
-                    ("★★ 2",     Some(2)),
-                    ("★★★ 3",   Some(3)),
-                    ("★★★★ 4", Some(4)),
-                    ("★★★★★ 5", Some(5)),
-                    ("Clear  [0]", None),
+                for (label, r, key) in [
+                    ("★ 1",       Some(1u8), "1"),
+                    ("★★ 2",     Some(2),   "2"),
+                    ("★★★ 3",   Some(3),   "3"),
+                    ("★★★★ 4", Some(4),   "4"),
+                    ("★★★★★ 5", Some(5),   "5"),
+                    ("Clear",      None,      "0"),
                 ] {
-                    if ui.add_enabled(has_image, egui::Button::new(label)).clicked() {
+                    if ui.add_enabled(has_image, egui::Button::new(label).shortcut_text(key)).clicked() {
                         self.set_rating(r);
                         ui.close_menu();
                     }
@@ -542,12 +587,29 @@ impl RivettApp {
 
             ui.separator();
 
-            if ui.add_enabled(has_image, egui::Button::new("Hide image  [H]")).clicked() {
+            ui.menu_button("Sort by", |ui| {
+                for (label, order) in [
+                    ("Name",          crate::settings::SortOrder::Name),
+                    ("Date Modified", crate::settings::SortOrder::DateModified),
+                    ("File Size",     crate::settings::SortOrder::FileSize),
+                ] {
+                    let is_selected = self.session.sort_order == order;
+                    if ui.selectable_label(is_selected, label).clicked() {
+                        self.session.sort_order = order;
+                        self.refresh_listing(ctx);
+                        ui.close_menu();
+                    }
+                }
+            });
+
+            ui.separator();
+
+            if ui.add_enabled(has_image, egui::Button::new("Hide image").shortcut_text("H")).clicked() {
                 self.hide_current(ctx);
                 ui.close_menu();
             }
 
-            if ui.add_enabled(has_image, egui::Button::new("Delete  [Del]"))
+            if ui.add_enabled(has_image, egui::Button::new("Delete").shortcut_text("Del"))
                 .on_hover_text("Two-step confirmation required")
                 .clicked()
             {
@@ -557,14 +619,14 @@ impl RivettApp {
 
             ui.separator();
 
-            if ui.add_enabled(has_image, egui::Button::new("Rotate CW  []]")).clicked() {
+            if ui.add_enabled(has_image, egui::Button::new("Rotate Clockwise").shortcut_text("]")).clicked() {
                 if let Some(path) = self.current_path.clone() {
                     self.session.rotate_cw(path);
                     self.load_current(ctx);
                 }
                 ui.close_menu();
             }
-            if ui.add_enabled(has_image, egui::Button::new("Rotate CCW  [[]")).clicked() {
+            if ui.add_enabled(has_image, egui::Button::new("Rotate Counter-Clockwise").shortcut_text("[")).clicked() {
                 if let Some(path) = self.current_path.clone() {
                     self.session.rotate_ccw(path);
                     self.load_current(ctx);
@@ -587,18 +649,19 @@ impl RivettApp {
 
             ui.separator();
 
-            let info_label = if self.show_info_panel { "Hide info  [I]" } else { "Show info  [I]" };
-            if ui.button(info_label).clicked() {
+            let info_label = if self.show_info_panel { "Hide info" } else { "Show info" };
+            if ui.add(egui::Button::new(info_label).shortcut_text("I")).clicked() {
                 self.show_info_panel = !self.show_info_panel;
                 ui.close_menu();
             }
 
             let fit_label = if self.viewer.fit_to_window {
-                "Actual size  [Ctrl+0]"
+                "Actual size"
             } else {
-                "Fit to window  [F]"
+                "Fit to window"
             };
-            if ui.button(fit_label).clicked() {
+            let fit_shortcut = if self.viewer.fit_to_window { "Ctrl+0" } else { "F" };
+            if ui.add(egui::Button::new(fit_label).shortcut_text(fit_shortcut)).clicked() {
                 if self.viewer.fit_to_window {
                     self.viewer.zoom_actual_size();
                 } else {
@@ -616,6 +679,15 @@ impl RivettApp {
 
 impl eframe::App for RivettApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // ── Background loading ───────────────────────────────────────────
+        self.image_cache.poll();
+        // Keep the GUI thread alive if we're waiting for background loads.
+        // In a real app we might only request_repaint when we know we're pending,
+        // but for a smooth viewer experience, egui's default often suffices.
+        // However, if nothing is moving, egui might go to sleep.
+        // Let's request repaint to be sure we pick up finished loads quickly.
+        ctx.request_repaint();
+
         // ── Keyboard ─────────────────────────────────────────────────────
         self.handle_keyboard(ctx);
 

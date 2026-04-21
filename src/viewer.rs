@@ -139,10 +139,12 @@ impl ViewerState {
         self.fit_to_window = false;
 
         if let Some(anchor) = anchor_screen {
-            let centre     = canvas_rect.center();
-            let offset     = anchor - centre;
-            let correction = offset * (1.0 - self.zoom / old_zoom);
-            self.pan      += correction;
+            // The image center is canvas_rect.center() + self.pan.
+            // We want the point under the anchor to stay under the anchor after scaling.
+            let image_centre = canvas_rect.center() + self.pan;
+            let offset       = anchor - image_centre;
+            let correction   = offset * (1.0 - self.zoom / old_zoom);
+            self.pan        += correction;
         }
     }
 

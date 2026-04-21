@@ -25,12 +25,24 @@ fn main() -> eframe::Result<()> {
     let initial_image = parse_args();
     let settings = AppSettings::load();
 
+    // Load icon
+    let icon_data = include_bytes!("../resources/icon.png");
+    let icon = image::load_from_memory(icon_data)
+        .expect("Failed to load embedded icon")
+        .to_rgba8();
+    let (width, height) = icon.dimensions();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
             .with_min_inner_size([400.0, 300.0])
             .with_drag_and_drop(true)
-            .with_title("Rivett"),
+            .with_title("Rivett")
+            .with_icon(egui::IconData {
+                rgba: icon.into_raw(),
+                width,
+                height,
+            }),
         ..Default::default()
     };
 

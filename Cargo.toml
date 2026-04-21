@@ -52,6 +52,9 @@ png         = "0.17"  # PNG chunk access for metadata (already transitive via im
 [dev-dependencies]
 tempfile = "3"
 
+[build-dependencies]
+winres = "0.1"
+
 # ---------------------------------------------------------------------------
 # Release profile — small, fast binary
 # ---------------------------------------------------------------------------

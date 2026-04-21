@@ -119,6 +119,13 @@ impl DirectoryListing {
 // Image loading
 // ---------------------------------------------------------------------------
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::sync::mpsc::{self, Receiver, Sender};
+
+// ... (DirectoryListing stays as is until load_image)
+
 /// Decode `path` into a [`DynamicImage`].
 ///
 /// Returns `Err(String)` with a human-readable message on failure. The caller
@@ -128,6 +135,95 @@ pub fn load_image(path: &Path) -> Result<DynamicImage, String> {
     image::open(path)
         .map_err(|e| format!("could not decode {}: {e}", path.display()))
 }
+
+/// Simple LRU cache for decoded images.
+pub struct ImageCache {
+    /// Maps path to decoded image.
+    images: HashMap<PathBuf, DynamicImage>,
+    /// Tracks insertion order for LRU eviction.
+    order:  VecDeque<PathBuf>,
+    /// Maximum number of images to keep in memory.
+    capacity: usize,
+    
+    /// Background loader channel to receive images.
+    rx: Receiver<(PathBuf, DynamicImage)>,
+    /// Sender for the background thread to use.
+    tx: Sender<(PathBuf, DynamicImage)>,
+    /// Set of paths currently being loaded in the background.
+    pending: Arc<Mutex<HashMap<PathBuf, thread::JoinHandle<()>>>>,
+}
+
+impl ImageCache {
+    pub fn new(capacity: usize) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            images: HashMap::new(),
+            order:  VecDeque::new(),
+            capacity,
+            rx,
+            tx,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn get(&mut self, path: &Path) -> Option<&DynamicImage> {
+        if self.images.contains_key(path) {
+            // Move to back of LRU (most recently used)
+            if let Some(pos) = self.order.iter().position(|p| p == path) {
+                let p = self.order.remove(pos).unwrap();
+                self.order.push_back(p);
+            }
+            self.images.get(path)
+        } else {
+            None
+        }
+    }
+
+    pub fn insert(&mut self, path: PathBuf, image: DynamicImage) {
+        if self.images.contains_key(&path) {
+            return;
+        }
+        if self.images.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.images.remove(&oldest);
+            }
+        }
+        self.order.push_back(path.clone());
+        self.images.insert(path, image);
+    }
+
+    /// Check for any images that finished loading in the background.
+    pub fn poll(&mut self) {
+        while let Ok((path, img)) = self.rx.try_recv() {
+            self.insert(path.clone(), img);
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.remove(&path);
+            }
+        }
+    }
+
+    /// Start loading an image in a background thread if it's not already cached or pending.
+    pub fn prefetch(&self, path: PathBuf) {
+        if self.images.contains_key(&path) {
+            return;
+        }
+
+        let mut pending = self.pending.lock().unwrap();
+        if pending.contains_key(&path) {
+            return;
+        }
+
+        let tx = self.tx.clone();
+        let p = path.clone();
+        let handle = thread::spawn(move || {
+            if let Ok(img) = load_image(&p) {
+                let _ = tx.send((p, img));
+            }
+        });
+        pending.insert(path, handle);
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Sorting
