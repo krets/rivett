@@ -121,9 +121,13 @@ impl RivettApp {
     // ── Image loading ─────────────────────────────────────────────────────
 
     fn open_image(&mut self, path: std::path::PathBuf, ctx: &Context) {
+        // Reset filter when explicitly opening a new file
+        self.session.rating_filter = None;
+
         if let Some(dir) = path.parent() {
-            let sort = self.session.sort_order;
-            match DirectoryListing::scan(dir, sort) {
+            let sort   = self.session.sort_order;
+            let db     = self.db.as_ref();
+            match DirectoryListing::scan(dir, sort, None, db) {
                 Ok(mut listing) => {
                     listing.seek_to(&path);
                     self.listing = Some(listing);
@@ -303,7 +307,7 @@ impl RivettApp {
                     .and_then(|n| n.to_str()).unwrap_or("?").to_string();
                 // Remove from listing so we don't see it again.
                 if let Some(ref mut listing) = self.listing {
-                    let _ = listing.refresh(self.session.sort_order);
+                    let _ = listing.refresh(self.session.sort_order, self.db.as_ref());
                 }
                 self.toast(format!("Deleted: {name}"));
                 self.current_path   = None;
@@ -325,7 +329,7 @@ impl RivettApp {
         self.session.flush();
         if let Some(dir) = self.listing.as_ref().map(|l| l.dir_path.clone()) {
             let sort = self.session.sort_order;
-            if let Ok(mut fresh) = DirectoryListing::scan(&dir, sort) {
+            if let Ok(mut fresh) = DirectoryListing::scan(&dir, sort, None, self.db.as_ref()) {
                 if let Some(ref cur) = self.current_path.clone() {
                     fresh.seek_to(cur);
                 }
@@ -551,10 +555,31 @@ impl RivettApp {
     fn refresh_listing(&mut self, ctx: &Context) {
         if let Some(ref mut listing) = self.listing {
             let sort = self.session.sort_order;
-            if let Err(e) = listing.refresh(sort) {
+            let db   = self.db.as_ref();
+            if let Err(e) = listing.refresh(sort, db) {
                 log::warn!("failed to refresh directory listing: {e}");
             }
             self.load_current(ctx);
+        }
+    }
+
+    fn apply_local_filter(&mut self, filter: Option<crate::session::RatingFilter>, ctx: &Context) {
+        self.session.rating_filter = filter;
+        if let Some(ref mut listing) = self.listing {
+            listing.rating_filter = filter;
+            self.refresh_listing(ctx);
+        }
+    }
+
+    fn apply_global_filter(&mut self, filter: crate::session::RatingFilter, ctx: &Context) {
+        let Some(ref db) = self.db else { return };
+        self.session.rating_filter = Some(filter);
+        match DirectoryListing::scan_global(db, filter) {
+            Ok(listing) => {
+                self.listing = Some(listing);
+                self.load_current(ctx);
+            }
+            Err(e) => log::warn!("failed to scan global ratings: {e}"),
         }
     }
 
@@ -562,6 +587,7 @@ impl RivettApp {
 
     fn draw_context_menu(&mut self, response: &egui::Response, ctx: &Context) {
         let has_image = self.current_path.is_some();
+        let has_db    = self.db.is_some();
 
         response.context_menu(|ui| {
             if ui.add_enabled(has_image, egui::Button::new("Bookmark").shortcut_text("B")).clicked() {
@@ -586,6 +612,41 @@ impl RivettApp {
             });
 
             ui.separator();
+
+            ui.menu_button("Filter", |ui| {
+                ui.menu_button("Local Filter (current folder)", |ui| {
+                    for r in 1..=5 {
+                        let filter = crate::session::RatingFilter {
+                            op:    crate::session::RatingFilterOp::AtLeast,
+                            value: r,
+                        };
+                        if ui.button(format!("At least ★ {r}")).clicked() {
+                            self.apply_local_filter(Some(filter), ctx);
+                            ui.close_menu();
+                        }
+                    }
+                });
+
+                ui.add_enabled_ui(has_db, |ui| {
+                    ui.menu_button("Global Filter (entire library)", |ui| {
+                        for r in 1..=5 {
+                            let filter = crate::session::RatingFilter {
+                                op:    crate::session::RatingFilterOp::AtLeast,
+                                value: r,
+                            };
+                            if ui.button(format!("At least ★ {r}")).clicked() {
+                                self.apply_global_filter(filter, ctx);
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                });
+
+                if ui.button("Clear Filter").clicked() {
+                    self.apply_local_filter(None, ctx);
+                    ui.close_menu();
+                }
+            });
 
             ui.menu_button("Sort by", |ui| {
                 for (label, order) in [

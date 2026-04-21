@@ -184,6 +184,16 @@ impl Database {
         )
     }
 
+    pub fn get_images(&self, directory_id: i64) -> Result<Vec<ImageRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, directory_id, filename, file_size, file_modified_at,
+                    rating, bookmarked, note, created_at, updated_at
+             FROM images WHERE directory_id = ?1",
+        )?;
+        let result: Result<Vec<_>> = stmt.query_map([directory_id], |row| map_image_row(row, 0))?.collect();
+        result
+    }
+
     pub fn set_rating(&self, directory_id: i64, filename: &str, rating: Option<u8>) -> Result<()> {
         self.ensure_image_exists(directory_id, filename)?;
         self.conn.execute(
@@ -239,6 +249,15 @@ impl Database {
         Ok(())
     }
 
+    /// Delete a specific image record.
+    pub fn delete_image(&self, directory_id: i64, filename: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM images WHERE directory_id = ?1 AND filename = ?2",
+            params![directory_id, filename],
+        )?;
+        Ok(())
+    }
+
     // ── Meta views ────────────────────────────────────────────────────────
 
     /// All bookmarked images, most recently bookmarked first.
@@ -273,6 +292,31 @@ impl Database {
         let result: Result<Vec<_>> = stmt.query_map([], |row| {
             let dir: String = row.get(0)?;
             Ok((dir, map_image_row(row, 1)?))
+        })?.collect();
+        result
+    }
+
+    /// All rated images matching a specific filter.
+    pub fn get_rated_filtered(&self, filter: crate::session::RatingFilter) -> Result<Vec<(std::path::PathBuf, ImageRecord)>> {
+        let op_sql = match filter.op {
+            crate::session::RatingFilterOp::AtLeast => ">=",
+            crate::session::RatingFilterOp::AtMost  => "<=",
+            crate::session::RatingFilterOp::Exactly => "=",
+        };
+        let query = format!(
+            "SELECT d.path,
+                    i.id, i.directory_id, i.filename, i.file_size,
+                    i.file_modified_at, i.rating, i.bookmarked, i.note,
+                    i.created_at, i.updated_at
+             FROM images i JOIN directories d ON i.directory_id = d.id
+             WHERE i.rating {} ?1
+             ORDER BY i.rating DESC, i.updated_at DESC",
+            op_sql
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let result: Result<Vec<_>> = stmt.query_map([filter.value], |row| {
+            let dir: String = row.get(0)?;
+            Ok((std::path::PathBuf::from(dir), map_image_row(row, 1)?))
         })?.collect();
         result
     }
