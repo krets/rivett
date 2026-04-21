@@ -1,14 +1,11 @@
-// Hide the console window on Windows in release builds.
-// In debug builds we keep it so log output is visible.
-#![cfg_attr(
-    all(target_os = "windows", not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
+// On Windows this is a GUI application — suppress the console window entirely.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
 mod db;
 mod formats;
 mod image_loader;
+mod metadata;
 mod session;
 mod settings;
 mod viewer;
@@ -17,17 +14,12 @@ use app::RivettApp;
 use settings::AppSettings;
 use std::path::PathBuf;
 
-/// Minimal CLI argument parsing — no dep needed for this.
-/// Usage:
-///   rivett [image_path]
 fn parse_args() -> Option<PathBuf> {
     let args: Vec<String> = std::env::args().collect();
-    // args[0] is the binary; args[1] (if present) is the image path
     args.get(1).map(PathBuf::from)
 }
 
 fn main() -> eframe::Result<()> {
-    // Initialise logging.  RUST_LOG=debug rivett will show all log output.
     env_logger::init();
 
     let initial_image = parse_args();

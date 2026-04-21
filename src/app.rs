@@ -2,12 +2,59 @@
 
 use eframe::CreationContext;
 use egui::{CentralPanel, Context, Key, Vec2};
+use std::time::{Duration, Instant};
 
-use crate::db::Database;
+use crate::db::{Database, ImageRecord};
 use crate::image_loader::{load_image, DirectoryListing};
+use crate::metadata::{read_metadata, MetaEntry};
 use crate::session::SessionState;
 use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
+
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+
+/// A brief on-screen notification that fades out automatically.
+struct Toast {
+    message: String,
+    born:    Instant,
+    ttl:     Duration,
+}
+
+impl Toast {
+    fn new(message: impl Into<String>) -> Self {
+        Self { message: message.into(), born: Instant::now(), ttl: Duration::from_millis(1800) }
+    }
+
+    /// 0.0 = invisible, 1.0 = fully opaque.
+    fn alpha(&self) -> f32 {
+        let elapsed  = self.born.elapsed().as_secs_f32();
+        let total    = self.ttl.as_secs_f32();
+        let fade_for = 0.4_f32; // last N seconds are a fade-out
+        if elapsed >= total { return 0.0; }
+        let remaining = total - elapsed;
+        (remaining / fade_for).min(1.0)
+    }
+
+    fn alive(&self) -> bool {
+        self.born.elapsed() < self.ttl
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DeleteConfirm
+// ---------------------------------------------------------------------------
+
+struct DeleteConfirm {
+    born: Instant,
+}
+
+impl DeleteConfirm {
+    fn new() -> Self { Self { born: Instant::now() } }
+    /// Confirmation expires after 3 s of inaction.
+    fn alive(&self) -> bool { self.born.elapsed() < Duration::from_secs(3) }
+}
 
 // ---------------------------------------------------------------------------
 // RivettApp
@@ -20,7 +67,11 @@ pub struct RivettApp {
     session:         SessionState,
     db:              Option<Database>,
     current_path:    Option<std::path::PathBuf>,
+    current_record:  Option<ImageRecord>,
+    metadata:        Vec<MetaEntry>,
     show_info_panel: bool,
+    toast:           Option<Toast>,
+    delete_confirm:  Option<DeleteConfirm>,
 }
 
 impl RivettApp {
@@ -37,7 +88,11 @@ impl RivettApp {
             listing:         None,
             db:              None,
             current_path:    None,
+            current_record:  None,
+            metadata:        vec![],
             show_info_panel: false,
+            toast:           None,
+            delete_confirm:  None,
             settings,
         };
 
@@ -53,6 +108,12 @@ impl RivettApp {
         }
 
         app
+    }
+
+    // ── Toast helper ──────────────────────────────────────────────────────
+
+    fn toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg));
     }
 
     // ── Image loading ─────────────────────────────────────────────────────
@@ -76,7 +137,9 @@ impl RivettApp {
             Some(p) => p,
             None => {
                 self.viewer.clear();
-                self.current_path = None;
+                self.current_path   = None;
+                self.current_record = None;
+                self.metadata       = vec![];
                 return;
             }
         };
@@ -91,20 +154,61 @@ impl RivettApp {
                 self.viewer.clear();
             }
         }
+
+        // Read PNG/EXIF metadata for the info panel.
+        self.metadata = read_metadata(&path);
+
+        // Fetch the DB record (ratings, bookmark, note).
+        self.refresh_record();
+    }
+
+    fn refresh_record(&mut self) {
+        self.current_record = self.current_path.as_ref().and_then(|path| {
+            let db      = self.db.as_ref()?;
+            let dir_str = path.parent()?.to_string_lossy().into_owned();
+            let fname   = path.file_name()?.to_str()?.to_string();
+            let dir     = db.find_directory_by_path(&dir_str).ok()??;
+            db.get_image(dir.id, &fname).ok().flatten()
+        });
     }
 
     // ── Navigation ────────────────────────────────────────────────────────
 
     fn navigate_next(&mut self, ctx: &Context) {
-        if self.listing.as_mut().map(|l| l.go_next()).unwrap_or(false) {
-            self.load_current(ctx);
+        let Some(ref mut listing) = self.listing else { return };
+        // Skip past ignored images.
+        let mut moved = false;
+        loop {
+            if !listing.go_next() { break; }
+            moved = true;
+            if let Some(p) = listing.current() {
+                if !self.session.is_ignored(p) { break; }
+            }
         }
+        if moved { self.load_current(ctx); }
     }
 
     fn navigate_prev(&mut self, ctx: &Context) {
-        if self.listing.as_mut().map(|l| l.go_prev()).unwrap_or(false) {
-            self.load_current(ctx);
+        let Some(ref mut listing) = self.listing else { return };
+        let mut moved = false;
+        loop {
+            if !listing.go_prev() { break; }
+            moved = true;
+            if let Some(p) = listing.current() {
+                if !self.session.is_ignored(p) { break; }
+            }
         }
+        if moved { self.load_current(ctx); }
+    }
+
+    // ── Hide (ignore) ─────────────────────────────────────────────────────
+
+    fn hide_current(&mut self, ctx: &Context) {
+        let Some(path) = self.current_path.clone() else { return };
+        self.session.ignore_image(path.clone());
+        self.toast(format!("Hidden: {}", path.file_name()
+            .and_then(|n| n.to_str()).unwrap_or("?")));
+        self.navigate_next(ctx);
     }
 
     // ── Rating / bookmarks ────────────────────────────────────────────────
@@ -117,8 +221,16 @@ impl RivettApp {
             path.file_name().and_then(|n| n.to_str()).map(str::to_string),
         ) {
             match db.upsert_directory_by_path(&dir_str) {
-                Ok(dir) => { let _ = db.set_rating(dir.id, &fname, rating); }
-                Err(e)  => log::warn!("set_rating: {e}"),
+                Ok(dir) => {
+                    let _ = db.set_rating(dir.id, &fname, rating);
+                    let msg = match rating {
+                        None    => "Rating cleared".to_string(),
+                        Some(r) => format!("Rated {}", "★".repeat(r as usize)),
+                    };
+                    self.toast(msg);
+                    self.refresh_record();
+                }
+                Err(e) => log::warn!("set_rating: {e}"),
             }
         }
     }
@@ -134,6 +246,39 @@ impl RivettApp {
                 let current = db.get_image(dir.id, &fname)
                     .ok().flatten().map(|r| r.bookmarked).unwrap_or(false);
                 let _ = db.set_bookmark(dir.id, &fname, !current);
+                self.toast(if current { "Bookmark removed" } else { "Bookmarked ★" });
+                self.refresh_record();
+            }
+        }
+    }
+
+    // ── Delete ────────────────────────────────────────────────────────────
+
+    fn confirm_delete(&mut self) {
+        self.delete_confirm = Some(DeleteConfirm::new());
+        self.toast("Press Delete again to confirm — Esc to cancel");
+    }
+
+    fn execute_delete(&mut self, ctx: &Context) {
+        self.delete_confirm = None;
+        let Some(path) = self.current_path.clone() else { return };
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                let name = path.file_name()
+                    .and_then(|n| n.to_str()).unwrap_or("?").to_string();
+                // Remove from listing so we don't see it again.
+                if let Some(ref mut listing) = self.listing {
+                    let _ = listing.refresh(self.session.sort_order);
+                }
+                self.toast(format!("Deleted: {name}"));
+                self.current_path   = None;
+                self.current_record = None;
+                self.metadata       = vec![];
+                self.viewer.clear();
+                self.load_current(ctx);
+            }
+            Err(e) => {
+                self.toast(format!("Delete failed: {e}"));
             }
         }
     }
@@ -160,13 +305,10 @@ impl RivettApp {
     fn reveal_in_file_manager(&self) {
         let Some(ref path) = self.current_path else { return };
         let dir = path.parent().unwrap_or(path.as_path());
-
         #[cfg(target_os = "windows")]
         { let _ = std::process::Command::new("explorer").arg(dir).spawn(); }
-
         #[cfg(target_os = "macos")]
         { let _ = std::process::Command::new("open").arg(dir).spawn(); }
-
         #[cfg(target_os = "linux")]
         { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); }
     }
@@ -185,6 +327,15 @@ impl RivettApp {
     fn handle_keyboard(&mut self, ctx: &Context) {
         let input = ctx.input(|i| i.clone());
 
+        // Cancel delete confirm with Esc
+        if input.key_pressed(Key::Escape) {
+            if self.delete_confirm.is_some() {
+                self.delete_confirm = None;
+                self.toast("Delete cancelled");
+                return;
+            }
+        }
+
         // Navigation
         if input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::PageDown) {
             self.navigate_next(ctx);
@@ -198,6 +349,9 @@ impl RivettApp {
 
         // Bookmark
         if input.key_pressed(Key::B) { self.toggle_bookmark(); }
+
+        // Hide
+        if input.key_pressed(Key::H) { self.hide_current(ctx); }
 
         // Ratings
         let rating_keys = [
@@ -240,11 +394,21 @@ impl RivettApp {
             self.viewer.zoom_actual_size();
         }
 
-        // Fit to window (F key) — use screen_rect as the available size;
-        // recalc_fit will refine it on the next frame.
+        // Fit to window
         if input.key_pressed(Key::F) {
             let avail = ctx.screen_rect().size();
             self.viewer.toggle_fit(avail);
+        }
+
+        // Delete (two-step) / Shift+Delete (immediate)
+        if input.key_pressed(Key::Delete) {
+            if input.modifiers.shift {
+                self.execute_delete(ctx);
+            } else if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
+                self.execute_delete(ctx);
+            } else {
+                self.confirm_delete();
+            }
         }
 
         // Hard refresh (Ctrl+Shift+R)
@@ -258,9 +422,10 @@ impl RivettApp {
     fn draw_info_panel(&self, ctx: &Context) {
         egui::SidePanel::right("info_panel")
             .resizable(true)
-            .min_width(260.0)
+            .min_width(280.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    // ── File info ─────────────────────────────────────────
                     ui.heading("Image Info");
                     ui.separator();
 
@@ -286,8 +451,60 @@ impl RivettApp {
                         ui.label(format!("Zoom: {:.0}%", self.viewer.zoom * 100.0));
 
                         if let Some(ref listing) = self.listing {
-                            ui.separator();
                             ui.label(listing.position_label());
+                        }
+
+                        // ── Rating & bookmark ─────────────────────────────
+                        ui.separator();
+                        ui.heading("Rating & Bookmark");
+
+                        let (rating, bookmarked) = self.current_record.as_ref()
+                            .map(|r| (r.rating, r.bookmarked))
+                            .unwrap_or((None, false));
+
+                        let stars = match rating {
+                            None    => "— (unrated)".to_string(),
+                            Some(r) => format!("{} ({})", "★".repeat(r as usize), r),
+                        };
+                        ui.label(format!("Rating: {stars}"));
+                        ui.label(if bookmarked { "Bookmarked: ✓" } else { "Bookmarked: ✗" });
+
+                        if let Some(ref rec) = self.current_record {
+                            if let Some(ref note) = rec.note {
+                                ui.label(format!("Note: {note}"));
+                            }
+                        }
+
+                        // ── Image metadata ───────────────────────────────
+                        if !self.metadata.is_empty() {
+                            ui.separator();
+                            ui.heading("Metadata");
+
+                            for entry in &self.metadata {
+                                // Large values (JSON, etc.) get a collapsing section.
+                                if entry.value.len() > 120 {
+                                    let preview = &entry.value[..entry.value.char_indices()
+                                        .nth(80).map(|(i, _)| i).unwrap_or(entry.value.len())];
+                                    egui::CollapsingHeader::new(
+                                        egui::RichText::new(&entry.key).strong()
+                                    )
+                                    .id_source(egui::Id::new(&entry.key))
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::TextEdit::multiline(
+                                                &mut entry.value.as_str()
+                                            )
+                                            .desired_width(f32::INFINITY)
+                                            .font(egui::TextStyle::Monospace),
+                                        );
+                                    });
+                                    let _ = preview; // shown in header implicitly
+                                } else {
+                                    ui.label(egui::RichText::new(&entry.key).strong());
+                                    ui.label(&entry.value);
+                                }
+                                ui.add_space(2.0);
+                            }
                         }
                     } else {
                         ui.label("No image loaded.");
@@ -322,6 +539,21 @@ impl RivettApp {
                     }
                 }
             });
+
+            ui.separator();
+
+            if ui.add_enabled(has_image, egui::Button::new("Hide image  [H]")).clicked() {
+                self.hide_current(ctx);
+                ui.close_menu();
+            }
+
+            if ui.add_enabled(has_image, egui::Button::new("Delete  [Del]"))
+                .on_hover_text("Two-step confirmation required")
+                .clicked()
+            {
+                self.confirm_delete();
+                ui.close_menu();
+            }
 
             ui.separator();
 
@@ -370,7 +602,6 @@ impl RivettApp {
                 if self.viewer.fit_to_window {
                     self.viewer.zoom_actual_size();
                 } else {
-                    // canvas size isn't available here; recalc_fit fixes zoom next frame
                     self.viewer.toggle_fit(ctx.screen_rect().size());
                 }
                 ui.close_menu();
@@ -389,25 +620,20 @@ impl eframe::App for RivettApp {
         self.handle_keyboard(ctx);
 
         // ── Drag-and-drop ─────────────────────────────────────────────────
-        // Draw an overlay while dragging over the window.
         let hovered_files = ctx.input(|i| i.raw.hovered_files.clone());
         if !hovered_files.is_empty() {
             let screen = ctx.screen_rect();
             let overlay = ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("drop_overlay"),
+                egui::Order::Foreground, egui::Id::new("drop_overlay"),
             ));
             overlay.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 110));
             overlay.text(
-                screen.center(),
-                egui::Align2::CENTER_CENTER,
+                screen.center(), egui::Align2::CENTER_CENTER,
                 "Drop image to open",
-                egui::FontId::proportional(28.0),
-                egui::Color32::WHITE,
+                egui::FontId::proportional(28.0), egui::Color32::WHITE,
             );
         }
 
-        // Open the first dropped image file.
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
             if let Some(path) = file.path {
@@ -416,10 +642,15 @@ impl eframe::App for RivettApp {
             }
         }
 
+        // ── Expire delete confirm ─────────────────────────────────────────
+        if let Some(ref dc) = self.delete_confirm {
+            if !dc.alive() { self.delete_confirm = None; }
+        }
+
         // ── Window title ─────────────────────────────────────────────────
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
 
-        // ── Side panels (must precede CentralPanel) ───────────────────────
+        // ── Side panels ───────────────────────────────────────────────────
         if self.show_info_panel {
             self.draw_info_panel(ctx);
         }
@@ -429,20 +660,17 @@ impl eframe::App for RivettApp {
             let canvas = ui.max_rect();
             self.viewer.recalc_fit(ui.available_size());
 
-            // Claim the whole canvas for interaction (pan / zoom / menus).
             let response = ui.allocate_rect(canvas, egui::Sense::click_and_drag());
 
-            // ── Pan (left-button drag) ────────────────────────────────────
+            // Pan
             if response.dragged_by(egui::PointerButton::Primary) {
                 self.viewer.fit_to_window = false;
                 self.viewer.pan += response.drag_delta();
             }
 
-            // ── Zoom (scroll wheel & touchpad pinch) ──────────────────────
+            // Zoom
             if response.hovered() {
-                let (scroll_y, zoom_delta) = ctx.input(|i| {
-                    (i.smooth_scroll_delta.y, i.zoom_delta())
-                });
+                let (scroll_y, zoom_delta) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
                 if zoom_delta != 1.0 {
                     let cursor = ctx.input(|i| i.pointer.latest_pos());
                     self.viewer.apply_zoom_delta(zoom_delta, cursor, canvas);
@@ -453,12 +681,17 @@ impl eframe::App for RivettApp {
                 }
             }
 
-            // ── Double-click (TODO: open file dialog via `rfd`) ───────────
+            // Double-click: native file open dialog
             if response.double_clicked() {
-                log::info!("double-click — file dialog not yet implemented (add `rfd` crate)");
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif"])
+                    .pick_file()
+                {
+                    self.open_image(path, ctx);
+                }
             }
 
-            // ── Right-click context menu ──────────────────────────────────
+            // Right-click context menu
             self.draw_context_menu(&response, ctx);
 
             // ── Paint ─────────────────────────────────────────────────────
@@ -467,29 +700,79 @@ impl eframe::App for RivettApp {
             if let Some(ref texture) = self.viewer.texture {
                 let rect = self.viewer.image_rect(canvas);
                 painter.image(
-                    texture.id(),
-                    rect,
+                    texture.id(), rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
             } else {
                 painter.text(
-                    canvas.center(),
-                    egui::Align2::CENTER_CENTER,
+                    canvas.center(), egui::Align2::CENTER_CENTER,
                     "Drag an image here, or double-click to open",
                     egui::FontId::proportional(18.0),
                     egui::Color32::from_gray(130),
                 );
             }
 
-            // ── Pending-change badge ──────────────────────────────────────
+            // Pending-change badge
             if self.session.has_pending_changes() {
                 painter.circle_filled(
                     egui::pos2(canvas.max.x - 14.0, canvas.min.y + 14.0),
-                    6.0,
-                    egui::Color32::from_rgb(255, 180, 0),
+                    6.0, egui::Color32::from_rgb(255, 180, 0),
+                );
+            }
+
+            // ── Delete confirm overlay ────────────────────────────────────
+            if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
+                let bg = egui::Color32::from_rgba_unmultiplied(180, 30, 30, 210);
+                let msg_rect = egui::Rect::from_center_size(
+                    canvas.center(),
+                    egui::vec2(420.0, 56.0),
+                );
+                painter.rect_filled(msg_rect, 6.0, bg);
+                painter.text(
+                    msg_rect.center(), egui::Align2::CENTER_CENTER,
+                    "Press Delete to confirm — Esc to cancel",
+                    egui::FontId::proportional(16.0), egui::Color32::WHITE,
                 );
             }
         });
+
+        // ── Toast overlay (drawn after everything else) ───────────────────
+        if let Some(ref toast) = self.toast {
+            let alpha = toast.alpha();
+            if alpha > 0.0 {
+                let screen  = ctx.screen_rect();
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip, egui::Id::new("toast"),
+                ));
+
+                let font = egui::FontId::proportional(16.0);
+                let galley = ctx.fonts(|f| f.layout_no_wrap(
+                    toast.message.clone(), font.clone(),
+                    egui::Color32::WHITE,
+                ));
+                let pad    = egui::vec2(16.0, 8.0);
+                let size   = galley.size() + pad * 2.0;
+                let center = egui::pos2(screen.center().x, screen.max.y - 48.0);
+                let rect   = egui::Rect::from_center_size(center, size);
+
+                let a = (alpha * 200.0) as u8;
+                painter.rect_filled(rect, 6.0, egui::Color32::from_rgba_unmultiplied(30, 30, 30, a));
+                painter.galley(rect.min + pad, galley, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8));
+
+                // Keep repainting until the toast expires.
+                ctx.request_repaint();
+            } else {
+                // Let the borrow end, then clear — we can't mutate self here,
+                // so we just let `update` clear it on the next frame via the
+                // alive() check below.  We request one more repaint to get there.
+                ctx.request_repaint();
+            }
+        }
+
+        // Clear expired toast (outside the borrow above).
+        if self.toast.as_ref().map(|t| !t.alive()).unwrap_or(false) {
+            self.toast = None;
+        }
     }
 }
