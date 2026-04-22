@@ -4,8 +4,7 @@
 //! in `app.rs`. GPU textures are owned here via [`egui::TextureHandle`].
 
 use egui::{Context, Pos2, Rect, TextureHandle, TextureOptions, Vec2};
-use image::DynamicImage;
-
+use crate::image_loader::DecodedImage;
 use crate::session::Rotation;
 
 // ---------------------------------------------------------------------------
@@ -71,14 +70,10 @@ impl ViewerState {
 
     /// Load a decoded image into egui, applying `rotation` before uploading.
     /// Replaces any existing texture.
-    pub fn load_image(&mut self, ctx: &Context, img: &DynamicImage, rotation: Rotation) {
-        let rotated = apply_rotation(img, rotation);
-        let rgba    = rotated.to_rgba8();
-        let w       = rgba.width()  as usize;
-        let h       = rgba.height() as usize;
-        let pixels  = rgba.into_raw();
-
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels);
+    pub fn load_image(&mut self, ctx: &Context, img: &DecodedImage, rotation: Rotation) {
+        let (rgba, w, h) = apply_rotation(img, rotation);
+        
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
         self.image_size = Vec2::new(w as f32, h as f32);
         self.texture    = Some(ctx.load_texture(
             "current_image",
@@ -183,14 +178,34 @@ pub fn fit_zoom(image_size: Vec2, available: Vec2) -> f32 {
     (available.x / image_size.x).min(available.y / image_size.y)
 }
 
-/// Apply `rotation` to `img`, returning a new [`DynamicImage`].
-fn apply_rotation(img: &DynamicImage, rotation: Rotation) -> DynamicImage {
+/// Apply `rotation` to `img`, returning new RGBA pixels and dimensions.
+fn apply_rotation(img: &DecodedImage, rotation: Rotation) -> (Vec<u8>, usize, usize) {
     use image::imageops;
+    
+    // Wrap raw pixels in an ImageBuffer for processing
+    // NOTE: In a performance-critical app, we might want to avoid cloning
+    // img.rgba here if we can rotate in-place or if we cache the rotated version.
+    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+        img.width, img.height, img.rgba.clone()
+    ).expect("Invalid image buffer");
+
     match rotation {
-        Rotation::None  => img.clone(),
-        Rotation::Cw90  => DynamicImage::ImageRgba8(imageops::rotate90 (&img.to_rgba8())),
-        Rotation::Cw180 => DynamicImage::ImageRgba8(imageops::rotate180(&img.to_rgba8())),
-        Rotation::Cw270 => DynamicImage::ImageRgba8(imageops::rotate270(&img.to_rgba8())),
+        Rotation::None  => (img.rgba.clone(), img.width as usize, img.height as usize),
+        Rotation::Cw90  => {
+            let res = imageops::rotate90(&buffer);
+            let (w, h) = (res.width() as usize, res.height() as usize);
+            (res.into_raw(), w, h)
+        }
+        Rotation::Cw180 => {
+            let res = imageops::rotate180(&buffer);
+            let (w, h) = (res.width() as usize, res.height() as usize);
+            (res.into_raw(), w, h)
+        }
+        Rotation::Cw270 => {
+            let res = imageops::rotate270(&buffer);
+            let (w, h) = (res.width() as usize, res.height() as usize);
+            (res.into_raw(), w, h)
+        }
     }
 }
 

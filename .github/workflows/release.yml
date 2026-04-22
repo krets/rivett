@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --version 0.3.9
+        
+      - name: Build Rivett
+        run: cargo build --release
+        
+      - name: Build MSI Installer
+        run: cargo wix --no-build --nocapture
+        
+      - name: Package Release
+        run: |
+          mkdir dist
+          cp target/release/rivett.exe dist/
+          cp README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath rivett-windows-portable.zip
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rivett-windows-portable.zip
+            target/wix/*.msi
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

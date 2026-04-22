@@ -9,8 +9,6 @@
 
 use std::path::{Path, PathBuf};
 
-use image::DynamicImage;
-
 use crate::formats::SupportedFormat;
 use crate::settings::SortOrder;
 
@@ -216,29 +214,40 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 // ... (DirectoryListing stays as is until load_image)
 
-/// Decode `path` into a [`DynamicImage`].
-///
-/// Returns `Err(String)` with a human-readable message on failure. The caller
-/// is responsible for displaying a placeholder and offering the ignore options
-/// described in the spec.
-pub fn load_image(path: &Path) -> Result<DynamicImage, String> {
-    image::open(path)
-        .map_err(|e| format!("could not decode {}: {e}", path.display()))
+/// A fully decoded RGBA image ready for upload to the GPU.
+#[derive(Clone)]
+pub struct DecodedImage {
+    pub rgba:   Vec<u8>,
+    pub width:  u32,
+    pub height: u32,
+}
+
+/// Decode `path` into a [`DecodedImage`].
+pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
+    let img = image::open(path)
+        .map_err(|e| format!("could not decode {}: {e}", path.display()))?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok(DecodedImage {
+        rgba: rgba.into_raw(),
+        width,
+        height,
+    })
 }
 
 /// Simple LRU cache for decoded images.
 pub struct ImageCache {
     /// Maps path to decoded image.
-    images: HashMap<PathBuf, DynamicImage>,
+    images: HashMap<PathBuf, DecodedImage>,
     /// Tracks insertion order for LRU eviction.
     order:  VecDeque<PathBuf>,
     /// Maximum number of images to keep in memory.
     capacity: usize,
     
     /// Background loader channel to receive images.
-    rx: Receiver<(PathBuf, DynamicImage)>,
+    rx: Receiver<(PathBuf, DecodedImage)>,
     /// Sender for the background thread to use.
-    tx: Sender<(PathBuf, DynamicImage)>,
+    tx: Sender<(PathBuf, DecodedImage)>,
     /// Set of paths currently being loaded in the background.
     pending: Arc<Mutex<HashMap<PathBuf, thread::JoinHandle<()>>>>,
 }
@@ -256,7 +265,7 @@ impl ImageCache {
         }
     }
 
-    pub fn get(&mut self, path: &Path) -> Option<&DynamicImage> {
+    pub fn get(&mut self, path: &Path) -> Option<&DecodedImage> {
         if self.images.contains_key(path) {
             // Move to back of LRU (most recently used)
             if let Some(pos) = self.order.iter().position(|p| p == path) {
@@ -269,7 +278,7 @@ impl ImageCache {
         }
     }
 
-    pub fn insert(&mut self, path: PathBuf, image: DynamicImage) {
+    pub fn insert(&mut self, path: PathBuf, image: DecodedImage) {
         if self.images.contains_key(&path) {
             return;
         }
@@ -313,6 +322,7 @@ impl ImageCache {
         pending.insert(path, handle);
     }
 }
+
 
 
 // ---------------------------------------------------------------------------

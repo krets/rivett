@@ -1,6 +1,7 @@
 [package]
 name        = "rivett"
 version     = "0.1.0"
+authors     = ["Rivett Developers <dev@rivett.com>"]
 edition     = "2021"
 description = "Rust Image Vetting Tool — fast, keyboard-driven image viewer"
 license     = "MIT"

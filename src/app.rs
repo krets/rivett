@@ -95,7 +95,7 @@ impl RivettApp {
             toast:           None,
             delete_confirm:  None,
             settings,
-            image_cache:     ImageCache::new(8),
+            image_cache:     ImageCache::new(24),
         };
 
         app.db = app.settings.central_db_resolved().and_then(|p| {
