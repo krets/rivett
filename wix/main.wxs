@@ -123,7 +123,7 @@
                         </Component>
                         <Component Id='RegistryEntries' Guid='*'>
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Type='string' Value='Rivett Image' KeyPath='yes' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image\DefaultIcon' Type='string' Value='[#exe0],0' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Name='PerceivedType' Type='string' Value='image' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image\shell\open\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\.png\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\.jpg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
