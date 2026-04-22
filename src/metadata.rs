@@ -2,7 +2,7 @@
 //!
 //! Currently reads PNG `tEXt` and `iTXt` chunks, which is where ComfyUI,
 //! Automatic1111, and InvokeAI embed their workflow/prompt data.
-//! EXIF (JPEG/TIFF) support is implemented via the `exif` crate.
+//! EXIF (JPEG/TIFF/WebP) support is implemented via the `exif` crate.
 
 use std::path::Path;
 use std::fs::File;
@@ -19,29 +19,35 @@ pub struct MetaEntry {
 /// Extract all readable metadata from a file.
 /// Returns an empty vec for unsupported formats or unreadable files.
 pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
-    match path.extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png")                    => read_png(path),
-        Some("jpg") | Some("jpeg")     => read_exif(path),
-        Some("tif") | Some("tiff")     => read_exif(path),
+    let Ok(file) = File::open(path) else { return vec![] };
+    let reader = BufReader::new(file);
+    let Ok(img_reader) = image::ImageReader::new(reader).with_guessed_format() else { return vec![] };
+    
+    match img_reader.format() {
+        Some(image::ImageFormat::Png)  => read_png(path),
+        Some(image::ImageFormat::Jpeg) => read_exif(path),
+        Some(image::ImageFormat::Tiff) => read_exif(path),
+        Some(image::ImageFormat::WebP) => read_exif(path),
         _                              => vec![],
     }
 }
 
 /// Returns the EXIF orientation tag (1-8) if present.
 pub fn get_orientation(path: &Path) -> Option<u32> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let exifreader = exif::Reader::new();
-    let exif = exifreader.read_from_container(&mut reader).ok()?;
+    let Ok(file) = File::open(path) else { return None };
+    let reader = BufReader::new(file);
+    let Ok(img_reader) = image::ImageReader::new(reader).with_guessed_format() else { return None };
     
-    if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-        field.value.get_uint(0)
-    } else {
-        None
+    match img_reader.format() {
+        Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Tiff) | Some(image::ImageFormat::WebP) => {
+            let file = File::open(path).ok()?;
+            let mut reader = BufReader::new(file);
+            let exifreader = exif::Reader::new();
+            let exif = exifreader.read_from_container(&mut reader).ok()?;
+            exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
+                .value.get_uint(0)
+        }
+        _ => None
     }
 }
 
@@ -79,7 +85,7 @@ fn read_png(path: &Path) -> Vec<MetaEntry> {
 }
 
 // ---------------------------------------------------------------------------
-// JPEG/TIFF — EXIF
+// JPEG/TIFF/WebP — EXIF
 // ---------------------------------------------------------------------------
 
 fn read_exif(path: &Path) -> Vec<MetaEntry> {

@@ -224,7 +224,15 @@ pub struct DecodedImage {
 
 /// Decode `path` into a [`DecodedImage`].
 pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
-    let mut img = image::open(path)
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("could not open {}: {e}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+    
+    let img_reader = image::ImageReader::new(reader)
+        .with_guessed_format()
+        .map_err(|e| format!("could not determine format for {}: {e}", path.display()))?;
+        
+    let mut img = img_reader.decode()
         .map_err(|e| format!("could not decode {}: {e}", path.display()))?;
     
     // Apply EXIF orientation if applicable
@@ -388,14 +396,14 @@ mod tests {
     #[test]
     fn scan_finds_supported_extensions() {
         let dir     = make_dir(&["b.png", "a.jpg", "c.bmp", "skip.txt"]);
-        let listing = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let listing = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         assert_eq!(listing.len(), 3, "txt should be excluded");
     }
 
     #[test]
     fn scan_sorts_by_name_ascending() {
         let dir     = make_dir(&["c.gif", "a.png", "b.jpg"]);
-        let listing = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let listing = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         let names: Vec<_> = listing.files.iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap())
             .collect();
@@ -405,7 +413,7 @@ mod tests {
     #[test]
     fn navigation_does_not_wrap_at_end() {
         let dir     = make_dir(&["a.png", "b.png", "c.png"]);
-        let mut l   = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l   = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         while l.go_next() {}
         assert!(!l.can_go_next());
         assert!(l.can_go_prev());
@@ -415,7 +423,7 @@ mod tests {
     #[test]
     fn navigation_does_not_wrap_at_start() {
         let dir   = make_dir(&["a.png", "b.png"]);
-        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         assert!(!l.can_go_prev());
         assert!(!l.go_prev(), "go_prev at start must return false");
         assert_eq!(l.current_index, 0);
@@ -424,7 +432,7 @@ mod tests {
     #[test]
     fn seek_to_positions_cursor_correctly() {
         let dir     = make_dir(&["a.png", "b.png", "c.png"]);
-        let mut l   = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l   = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         let target  = dir.path().join("b.png");
         assert!(l.seek_to(&target));
         assert_eq!(l.current_index, 1);
@@ -433,7 +441,7 @@ mod tests {
     #[test]
     fn seek_to_unknown_returns_false() {
         let dir   = make_dir(&["a.png"]);
-        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         assert!(!l.seek_to(&dir.path().join("nonexistent.png")));
         assert_eq!(l.current_index, 0, "cursor should be unchanged");
     }
@@ -441,7 +449,7 @@ mod tests {
     #[test]
     fn empty_directory_listing() {
         let dir   = make_dir(&["readme.txt"]);
-        let l     = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let l     = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         assert!(l.is_empty());
         assert!(l.current().is_none());
         assert!(!l.can_go_next());
@@ -451,7 +459,7 @@ mod tests {
     #[test]
     fn position_label_is_1_based() {
         let dir   = make_dir(&["a.png", "b.png", "c.png"]);
-        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         assert_eq!(l.position_label(), "1 / 3");
         l.go_next();
         assert_eq!(l.position_label(), "2 / 3");
@@ -460,9 +468,9 @@ mod tests {
     #[test]
     fn refresh_restores_cursor_to_same_file() {
         let dir    = make_dir(&["a.png", "b.png", "c.png"]);
-        let mut l  = DirectoryListing::scan(dir.path(), SortOrder::Name).unwrap();
+        let mut l  = DirectoryListing::scan(dir.path(), SortOrder::Name, None, None).unwrap();
         l.seek_to(&dir.path().join("b.png"));
-        l.refresh(SortOrder::Name).unwrap();
+        l.refresh(SortOrder::Name, None).unwrap();
         assert_eq!(
             l.current().unwrap().file_name().unwrap(),
             "b.png",
