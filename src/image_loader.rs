@@ -246,18 +246,18 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    let mut processor = rsraw::Processor::new();
+    let mut processor = libraw_rs::Processor::new();
     processor.open_file(path)
-        .map_err(|e| format!("rsraw open failed: {e:?}"))?;
+        .map_err(|e| format!("LibRaw open failed: {e:?}"))?;
     
     processor.unpack()
-        .map_err(|e| format!("rsraw unpack failed: {e:?}"))?;
+        .map_err(|e| format!("LibRaw unpack failed: {e:?}"))?;
     
     processor.dcraw_process()
-        .map_err(|e| format!("rsraw process failed: {e:?}"))?;
+        .map_err(|e| format!("LibRaw process failed: {e:?}"))?;
     
     let processed = processor.make_mem_image()
-        .map_err(|e| format!("rsraw image creation failed: {e:?}"))?;
+        .map_err(|e| format!("LibRaw image creation failed: {e:?}"))?;
     
     let width  = processed.width();
     let height = processed.height();
