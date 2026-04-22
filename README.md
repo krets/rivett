@@ -1,59 +1,58 @@
 # <img src="resources/icon.png" width="48" height="48" valign="middle"> Rivett
 
-**Rust Image Vetting Tool** — A professional, high-performance image viewer designed for photographers, digital artists, and collectors who need to sort and vet large volumes of images quickly.
+Rivett is a high-performance image viewer designed for sorting and vetting large volumes of images. It focuses on speed and a keyboard-driven workflow, making it suitable for photographers and digital artists.
 
-## 🚀 Key Features
+## Features
 
-- **Extreme Performance:** Native Rust + OpenGL ensures buttery smooth panning and zooming, even with massive RAW or EXR files.
-- **Modern Format Support:** Native support for standard web formats, high-dynamic-range imagery (EXR), vector graphics (SVG), and professional Camera RAW formats (.CR3, .ARW, .NEF, etc.).
-- **Windows Integration:** Standard MSI installer provides a native "Open with Rivett" context menu and clean file associations.
-- **Workflow-First UI:** A minimalist interface that stays out of your way, with an optional Info Panel for deep metadata inspection.
+- **Performance:** Built with Rust and OpenGL for smooth panning and zooming, even with large files.
+- **Format Support:** Standard web formats, high-dynamic-range imagery (EXR), vector graphics (SVG), and professional Camera RAW formats (.CR3, .ARW, .NEF, etc.) via LibRaw.
+- **Windows Integration:** Includes an MSI installer that sets up a native "Open with Rivett" context menu and file associations.
+- **Minimalist UI:** Interface designed to stay out of the way, with an optional panel for metadata and EXIF inspection.
 
-## 📥 Installation
+## Installation
 
-The easiest way to use Rivett is to download the professional installer for your platform:
+Professional installers are available for most platforms:
 
-1.  Go to the [**Releases**](https://github.com/krets/rivett/releases) page.
-2.  **Windows:** Download and run the `.msi` installer.
-3.  **Linux:** Download the `.AppImage` (portable) or `.deb` (Debian/Ubuntu).
+1.  Visit the [Releases](https://github.com/krets/rivett/releases) page.
+2.  **Windows:** Download the `.msi` installer.
+3.  **Linux:** Download the `.AppImage` or `.deb` package.
 4.  **macOS:** Download the `.app` bundle.
 
-## 📖 User Guide
+## User Guide
 
-Rivett is designed to be used primarily with your keyboard for maximum speed, but it fully supports mouse interaction for detailed inspection.
+Rivett is optimized for keyboard use, though it supports mouse interaction for inspection and navigation.
 
 ### Navigation
-- **`Left` / `Right`**: Previous / Next image (resets zoom to "Fit").
-- **`Shift + Arrow`**: Navigate while **preserving** your current zoom and pan position.
-- **`PageUp` / `PageDown`**: Jump through your collection.
+- **Left / Right**: Previous / Next image (resets zoom to fit).
+- **Shift + Arrow**: Navigate while preserving the current zoom and pan position.
+- **PageUp / PageDown**: Move quickly through a collection.
 
 ### Zoom & Pan
-- **`Scroll Wheel`**: Zoom in/out at the cursor position.
-- **`Left Click + Drag`**: Pan the image.
-- **`F`**: Toggle "Fit to Window".
-- **`Ctrl + 0`**: Zoom to Actual Size (1:1 pixels).
-- **`Arrow Up / Down`**: Keyboard zoom.
+- **Scroll Wheel**: Zoom in and out at the cursor position.
+- **Left Click + Drag**: Pan the image.
+- **F**: Toggle "Fit to Window".
+- **Ctrl + 0**: Zoom to actual size (1:1 pixels).
+- **Arrow Up / Down**: Incremental zoom via keyboard.
 
-### Vetting & Editing
-- **`1` - `5`**: Set image rating.
-- **`0`**: Clear rating.
-- **`B`**: Toggle Bookmark.
-- **`[` / `]`**: Rotate image 90° (saved automatically to the local database).
-- **`Delete`**: Delete file (requires two-step confirmation).
-- **`H`**: Hide image from current session.
+### Vetting
+- **1 - 5**: Set image rating.
+- **0**: Clear rating.
+- **B**: Toggle bookmark.
+- **[ / ]**: Rotate image 90° (saved to the local database).
+- **Delete**: Delete the current file (requires two-step confirmation).
+- **H**: Hide the image from the current session.
 
 ### Tools
-- **`I`**: Toggle Info Panel (Metadata/EXIF).
-- **`Right Click`**: Open Context Menu for all options.
-- **`Ctrl + Shift + R`**: Reset Session (clears filters and temporary state).
-- **`Click on Error`**: If an image fails to load, click the error message to copy it for troubleshooting.
+- **I**: Toggle the metadata info panel.
+- **Right Click**: Open the context menu for all options.
+- **Ctrl + Shift + R**: Reset session (clears filters and temporary session state).
+- **Error Handling**: If a file fails to load, click the error message in the viewport to copy it to the clipboard.
 
----
+## Supported Formats
 
-### 📷 Supported Formats
 - **Standard:** PNG, JPEG, WebP, BMP, GIF
-- **Professional:** OpenEXR (.exr), SVG
-- **Camera RAW:** Canon (.CR2, .CR3), Sony (.ARW), Nikon (.NEF), Fujifilm (.RAF), Adobe Digital Negative (.DNG), and many more via LibRaw.
+- **Production:** OpenEXR (.exr), SVG
+- **Camera RAW:** Canon (.CR2, .CR3), Sony (.ARW), Nikon (.NEF), Fujifilm (.RAF), Adobe Digital Negative (.DNG), and others supported by LibRaw.
 
 ## License
 
