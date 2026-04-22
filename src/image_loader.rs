@@ -315,8 +315,12 @@ fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
         let mut img = image::load_from_memory(jpeg_bytes)
             .map_err(|e| format!("failed to decode extracted CR3 preview: {e}"))?;
         
-        // Extract orientation from the embedded JPEG bytes
-        if let Some(orientation) = crate::metadata::get_orientation_from_bytes(jpeg_bytes) {
+        // Try extracting orientation from the embedded JPEG bytes first.
+        // If missing (common in .CR3), fallback to the main file's deep metadata.
+        let orientation = crate::metadata::get_orientation_from_bytes(jpeg_bytes)
+            .or_else(|| crate::metadata::get_orientation(path));
+
+        if let Some(orientation) = orientation {
             img = apply_orientation_to_image(img, orientation);
         }
 
