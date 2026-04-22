@@ -14,11 +14,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install vcpkg dependencies
-        run: |
-          vcpkg install libraw:x64-windows
-          vcpkg integrate install
-        
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         
@@ -27,9 +22,6 @@ jobs:
         
       - name: Build Rivett
         run: cargo build --release
-        env:
-          VCPKG_ROOT: C:\vcpkg
-          LIBRAW_R_STATIC: 1
         
       - name: Build MSI Installer
         run: cargo wix --no-build --nocapture
@@ -59,7 +51,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev squashfs-tools libwayland-dev libxkbcommon-dev libraw-dev
+          sudo apt-get install -y pkg-config libssl-dev squashfs-tools libwayland-dev libxkbcommon-dev
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-bundle
@@ -83,8 +75,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: brew install libraw
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-bundle

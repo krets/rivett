@@ -246,37 +246,26 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    let mut processor = libraw_rs::Processor::new();
-    processor.open_file(path)
-        .map_err(|e| format!("LibRaw open failed: {e:?}"))?;
+    let raw = rawloader::decode_file(path)
+        .map_err(|e| format!("rawloader decode failed: {e:?}"))?;
     
-    processor.unpack()
-        .map_err(|e| format!("LibRaw unpack failed: {e:?}"))?;
+    let width  = raw.width;
+    let height = raw.height;
     
-    processor.dcraw_process()
-        .map_err(|e| format!("LibRaw process failed: {e:?}"))?;
-    
-    let processed = processor.make_mem_image()
-        .map_err(|e| format!("LibRaw image creation failed: {e:?}"))?;
-    
-    let width  = processed.width();
-    let height = processed.height();
-    let data   = processed.as_ref(); // This is RGB8
-    
-    // Convert RGB to RGBA
-    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-    for chunk in data.chunks_exact(3) {
-        rgba.push(chunk[0]);
-        rgba.push(chunk[1]);
-        rgba.push(chunk[2]);
-        rgba.push(255);
+    match &raw.data {
+        rawloader::RawImageData::Integer(data) => {
+            let mut rgba = Vec::with_capacity(width * height * 4);
+            // Simple preview conversion: take top 8 bits of each channel
+            for chunk in data.chunks_exact(3) {
+                rgba.push((chunk[0] >> 8) as u8);
+                rgba.push((chunk[1] >> 8) as u8);
+                rgba.push((chunk[2] >> 8) as u8);
+                rgba.push(255);
+            }
+            Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
+        }
+        _ => Err("Unsupported raw data format (non-integer)".to_string()),
     }
-    
-    Ok(DecodedImage {
-        rgba,
-        width: width as u32,
-        height: height as u32,
-    })
 }
 
 
