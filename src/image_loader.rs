@@ -246,21 +246,30 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    let raw = rawloader::decode_file(path)
-        .map_err(|e| format!("rawloader decode failed: {e:?}"))?;
+    let raw = rawler::decode_file(path)
+        .map_err(|e| format!("rawler decode failed: {e:?}"))?;
     
     let width  = raw.width;
     let height = raw.height;
     
     match &raw.data {
-        rawloader::RawImageData::Integer(data) => {
+        rawler::RawImageData::Integer(data) => {
             let mut rgba = Vec::with_capacity(width * height * 4);
-            // Simple preview conversion: take top 8 bits of each channel
-            for chunk in data.chunks_exact(3) {
-                rgba.push((chunk[0] >> 8) as u8);
-                rgba.push((chunk[1] >> 8) as u8);
-                rgba.push((chunk[2] >> 8) as u8);
-                rgba.push(255);
+            // This is a very simplistic "preview" conversion.
+            // rawler data depends on the sensor, but for many it's 3-channel or Bayer.
+            // Let's assume 3-channel for a start if it's already processed,
+            // or find the best way to downsample.
+            if data.len() >= width * height * 3 {
+                for chunk in data.chunks_exact(3) {
+                    rgba.push((chunk[0] >> 8) as u8);
+                    rgba.push((chunk[1] >> 8) as u8);
+                    rgba.push((chunk[2] >> 8) as u8);
+                    rgba.push(255);
+                }
+            } else {
+                // Bayer data or other — for now just fill with gray to avoid crash
+                // and explain the limitation.
+                return Err("Raw sensor data requires debayering (not yet implemented)".to_string());
             }
             Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
         }
