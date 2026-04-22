@@ -527,7 +527,7 @@ impl RivettApp {
                             Some(r) => format!("{} ({})", "★".repeat(r as usize), r),
                         };
                         ui.label(format!("Rating: {stars}"));
-                        ui.label(if bookmarked { "Bookmarked: ✓" } else { "Bookmarked: ✗" });
+                        ui.label(if bookmarked { "Bookmarked: Yes" } else { "Bookmarked: No" });
 
                         if let Some(ref rec) = self.current_record {
                             if let Some(ref note) = rec.note {
