@@ -858,7 +858,7 @@ impl eframe::App for RivettApp {
             // Double-click: native file open dialog
             if response.double_clicked() {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif"])
+                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif", "exr", "svg"])
                     .pick_file()
                 {
                     self.open_image(path, ctx);

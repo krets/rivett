@@ -4,7 +4,7 @@
 //! Navigation never wraps: the list has a hard start and end, matching the
 //! spec.
 //!
-//! [`load_image`] is a thin wrapper around `image::open` that returns a
+//! [`load_image`] is a thin wrapper around `image::ImageReader` that returns a
 //! descriptive error string instead of an `image::ImageError`.
 
 use std::path::{Path, PathBuf};
@@ -71,12 +71,22 @@ impl DirectoryListing {
         })
     }
 
-    /// Delete DB records for images in `directory_id` that are NOT in `current_files`.
-    fn prune_missing_images(
-        db:            &crate::db::Database,
-        directory_id:  i64,
-        current_files: &[PathBuf],
-    ) -> rusqlite::Result<()> {
+    /// Re-scan the directory in-place, preserving cursor position where possible.
+    pub fn refresh(
+        &mut self,
+        order: SortOrder,
+        db:    Option<&crate::db::Database>,
+    ) -> std::io::Result<()> {
+        let current_file = self.current().cloned();
+        let fresh = Self::scan(&self.dir_path, order, self.rating_filter, db)?;
+        *self = fresh;
+        if let Some(path) = current_file {
+            self.seek_to(&path);
+        }
+        Ok(())
+    }
+
+    fn prune_missing_images(db: &crate::db::Database, directory_id: i64, current_files: &[PathBuf]) -> rusqlite::Result<()> {
         let db_images = db.get_images(directory_id)?;
         let disk_names: std::collections::HashSet<_> = current_files.iter()
             .filter_map(|p| p.file_name()?.to_str())
@@ -128,19 +138,6 @@ impl DirectoryListing {
         }
     }
 
-    pub fn current(&self) -> Option<&PathBuf> {
-        self.files.get(self.current_index)
-    }
-
-    pub fn can_go_next(&self) -> bool {
-        !self.files.is_empty() && self.current_index + 1 < self.files.len()
-    }
-
-    pub fn can_go_prev(&self) -> bool {
-        self.current_index > 0
-    }
-
-    /// Advance cursor by one. Returns `false` (and does not move) at the end.
     pub fn go_next(&mut self) -> bool {
         if self.can_go_next() {
             self.current_index += 1;
@@ -150,7 +147,6 @@ impl DirectoryListing {
         }
     }
 
-    /// Move cursor back by one. Returns `false` (and does not move) at the start.
     pub fn go_prev(&mut self) -> bool {
         if self.can_go_prev() {
             self.current_index -= 1;
@@ -160,46 +156,28 @@ impl DirectoryListing {
         }
     }
 
+    pub fn can_go_next(&self) -> bool {
+        !self.files.is_empty() && self.current_index < self.files.len() - 1
+    }
+
+    pub fn can_go_prev(&self) -> bool {
+        self.current_index > 0
+    }
+
+    pub fn current(&self) -> Option<&PathBuf> {
+        self.files.get(self.current_index)
+    }
+
     pub fn len(&self) -> usize { self.files.len() }
     pub fn is_empty(&self) -> bool { self.files.is_empty() }
 
-    /// 1-based position string, e.g. "7 / 42".
+    /// Human-readable cursor position, e.g. "4 / 20".
     pub fn position_label(&self) -> String {
         if self.files.is_empty() {
             "0 / 0".to_string()
         } else {
             format!("{} / {}", self.current_index + 1, self.files.len())
         }
-    }
-
-    /// Re-scan the directory in-place, preserving cursor position where possible.
-    pub fn refresh(
-        &mut self,
-        order: SortOrder,
-        db:    Option<&crate::db::Database>,
-    ) -> std::io::Result<()> {
-        let current = self.current().cloned();
-
-        let fresh = if self.dir_path.as_os_str().is_empty() {
-            if let (Some(db), Some(filter)) = (db, self.rating_filter) {
-                Self::scan_global(db, filter)?
-            } else {
-                return Ok(()); // Should not happen
-            }
-        } else {
-            Self::scan(&self.dir_path, order, self.rating_filter, db)?
-        };
-
-        self.files  = fresh.files;
-        match current {
-            Some(ref p) if !self.seek_to(p) => {
-                // Image was removed or no longer matches filter; clamp cursor.
-                self.current_index = self.current_index
-                    .min(self.files.len().saturating_sub(1));
-            }
-            _ => {}
-        }
-        Ok(())
     }
 }
 
@@ -212,8 +190,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-// ... (DirectoryListing stays as is until load_image)
-
 /// A fully decoded RGBA image ready for upload to the GPU.
 #[derive(Clone)]
 pub struct DecodedImage {
@@ -224,6 +200,11 @@ pub struct DecodedImage {
 
 /// Decode `path` into a [`DecodedImage`].
 pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
+    // Special handling for SVG
+    if path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase()) == Some("svg".to_string()) {
+        return load_svg(path);
+    }
+
     let file = std::fs::File::open(path)
         .map_err(|e| format!("could not open {}: {e}", path.display()))?;
     let reader = std::io::BufReader::new(file);
@@ -258,20 +239,37 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
     })
 }
 
+fn load_svg(path: &Path) -> Result<DecodedImage, String> {
+    let opt = resvg::usvg::Options::default();
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    let tree = resvg::usvg::Tree::from_data(&data, &opt).map_err(|e| e.to_string())?;
+    
+    let pixmap_size = tree.size().to_int_size();
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
+        .ok_or("Failed to create pixmap")?;
+    
+    resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    
+    Ok(DecodedImage {
+        rgba: pixmap.take(),
+        width: pixmap_size.width(),
+        height: pixmap_size.height(),
+    })
+}
+
 /// Simple LRU cache for decoded images.
 pub struct ImageCache {
     /// Maps path to decoded image.
     images: HashMap<PathBuf, DecodedImage>,
-    /// Tracks insertion order for LRU eviction.
+    /// Order of access for LRU eviction.
     order:  VecDeque<PathBuf>,
     /// Maximum number of images to keep in memory.
     capacity: usize,
-    
-    /// Background loader channel to receive images.
-    rx: Receiver<(PathBuf, DecodedImage)>,
-    /// Sender for the background thread to use.
+
+    /// Background loading channel
     tx: Sender<(PathBuf, DecodedImage)>,
-    /// Set of paths currently being loaded in the background.
+    rx: Receiver<(PathBuf, DecodedImage)>,
+    /// Paths currently being loaded in the background.
     pending: Arc<Mutex<HashMap<PathBuf, thread::JoinHandle<()>>>>,
 }
 
@@ -282,19 +280,17 @@ impl ImageCache {
             images: HashMap::new(),
             order:  VecDeque::new(),
             capacity,
-            rx,
             tx,
+            rx,
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub fn get(&mut self, path: &Path) -> Option<&DecodedImage> {
+    pub fn get(&mut self, path: &PathBuf) -> Option<&DecodedImage> {
         if self.images.contains_key(path) {
-            // Move to back of LRU (most recently used)
-            if let Some(pos) = self.order.iter().position(|p| p == path) {
-                let p = self.order.remove(pos).unwrap();
-                self.order.push_back(p);
-            }
+            // Move to front of LRU
+            self.order.retain(|p| p != path);
+            self.order.push_back(path.clone());
             self.images.get(path)
         } else {
             None

@@ -1,11 +1,11 @@
-//! Supported image formats for Rivett v1.
+//! Supported image formats for Rivett.
 //!
 //! Format detection is extension-based only; no magic-byte sniffing is
 //! performed at this layer (the `image` crate handles that during decode).
 
 use std::path::Path;
 
-/// Every image format Rivett can decode in the initial release.
+/// Every image format Rivett can decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportedFormat {
     Png,
@@ -14,6 +14,8 @@ pub enum SupportedFormat {
     Bmp,
     Tiff,
     Gif,
+    Exr,
+    Svg,
 }
 
 impl SupportedFormat {
@@ -26,19 +28,21 @@ impl SupportedFormat {
     /// Infer the format from a lowercase extension string.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
-            "png"            => Some(Self::Png),
-            "jpg" | "jpeg"   => Some(Self::Jpeg),
-            "webp"           => Some(Self::WebP),
-            "bmp"            => Some(Self::Bmp),
-            "tif" | "tiff"   => Some(Self::Tiff),
-            "gif"            => Some(Self::Gif),
-            _                => None,
+            "png"                   => Some(Self::Png),
+            "jpg" | "jpeg"          => Some(Self::Jpeg),
+            "webp"                  => Some(Self::WebP),
+            "bmp"                   => Some(Self::Bmp),
+            "tif" | "tiff"          => Some(Self::Tiff),
+            "gif"                   => Some(Self::Gif),
+            "exr"                   => Some(Self::Exr),
+            "svg"                   => Some(Self::Svg),
+            _                       => None,
         }
     }
 
-    /// All known lowercase extensions, including JPEG aliases.
+    /// All known lowercase extensions, including aliases.
     pub fn all_extensions() -> &'static [&'static str] {
-        &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"]
+        &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "exr", "svg"]
     }
 
     /// `true` if this format can store rotation losslessly via metadata
@@ -56,6 +60,8 @@ impl SupportedFormat {
             Self::Bmp  => "BMP",
             Self::Tiff => "TIFF",
             Self::Gif  => "GIF",
+            Self::Exr  => "EXR",
+            Self::Svg  => "SVG",
         }
     }
 }
@@ -91,6 +97,7 @@ mod tests {
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("photo.PNG")),  Some(SupportedFormat::Png));
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("photo.JPEG")), Some(SupportedFormat::Jpeg));
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("photo.Gif")),  Some(SupportedFormat::Gif));
+        assert_eq!(SupportedFormat::from_path(&PathBuf::from("drawing.SVG")), Some(SupportedFormat::Svg));
     }
 
     #[test]
