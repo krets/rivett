@@ -21,34 +21,66 @@ pub struct MetaEntry {
 pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
     let Ok(file) = File::open(path) else { return vec![] };
     let reader = BufReader::new(file);
-    let Ok(img_reader) = image::ImageReader::new(reader).with_guessed_format() else { return vec![] };
+    let img_reader = image::ImageReader::new(reader).with_guessed_format();
     
-    match img_reader.format() {
-        Some(image::ImageFormat::Png)  => read_png(path),
-        Some(image::ImageFormat::Jpeg) => read_exif(path),
-        Some(image::ImageFormat::Tiff) => read_exif(path),
-        Some(image::ImageFormat::WebP) => read_exif(path),
-        _                              => vec![],
+    if let Ok(reader) = img_reader {
+        match reader.format() {
+            Some(image::ImageFormat::Png)  => return read_png(path),
+            Some(image::ImageFormat::Jpeg) => return read_exif(path),
+            Some(image::ImageFormat::Tiff) => return read_exif(path),
+            Some(image::ImageFormat::WebP) => return read_exif(path),
+            _                              => {}
+        }
     }
+
+    // Fallback for RAW formats that image crate might not sniff correctly
+    if is_raw_extension(path) {
+        return read_exif(path);
+    }
+
+    vec![]
+}
+
+fn is_raw_extension(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else { return false };
+    matches!(
+        ext.to_lowercase().as_str(),
+        "arw" | "cr2" | "cr3" | "nef" | "nrw" | "orf" | "raf" | "rw2" | "dng"
+    )
 }
 
 /// Returns the EXIF orientation tag (1-8) if present.
 pub fn get_orientation(path: &Path) -> Option<u32> {
     let Ok(file) = File::open(path) else { return None };
     let reader = BufReader::new(file);
-    let Ok(img_reader) = image::ImageReader::new(reader).with_guessed_format() else { return None };
+    let img_reader = image::ImageReader::new(reader).with_guessed_format();
     
-    match img_reader.format() {
-        Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Tiff) | Some(image::ImageFormat::WebP) => {
-            let file = File::open(path).ok()?;
-            let mut reader = BufReader::new(file);
-            let exifreader = exif::Reader::new();
-            let exif = exifreader.read_from_container(&mut reader).ok()?;
-            exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
-                .value.get_uint(0)
+    let is_raw = is_raw_extension(path);
+
+    if let Ok(reader) = img_reader {
+        match reader.format() {
+            Some(image::ImageFormat::Jpeg) | Some(image::ImageFormat::Tiff) | Some(image::ImageFormat::WebP) => {
+                let file = File::open(path).ok()?;
+                let mut reader = BufReader::new(file);
+                let exifreader = exif::Reader::new();
+                let exif = exifreader.read_from_container(&mut reader).ok()?;
+                return exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
+                    .value.get_uint(0);
+            }
+            _ => {}
         }
-        _ => None
     }
+
+    if is_raw {
+        let file = File::open(path).ok()?;
+        let mut reader = BufReader::new(file);
+        let exifreader = exif::Reader::new();
+        let exif = exifreader.read_from_container(&mut reader).ok()?;
+        return exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
+            .value.get_uint(0);
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------

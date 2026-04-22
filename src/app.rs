@@ -171,7 +171,7 @@ impl RivettApp {
                 }
                 Err(e)  => {
                     log::warn!("{e}");
-                    self.viewer.clear();
+                    self.viewer.set_error(e);
                 }
             }
         }
@@ -880,6 +880,13 @@ impl eframe::App for RivettApp {
                     texture.id(), rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
+                );
+            } else if let Some(ref err) = self.viewer.load_error {
+                painter.text(
+                    canvas.center(), egui::Align2::CENTER_CENTER,
+                    format!("Error loading image:\n{err}"),
+                    egui::FontId::proportional(18.0),
+                    egui::Color32::LIGHT_RED,
                 );
             } else {
                 painter.text(

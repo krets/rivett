@@ -47,6 +47,8 @@ pub struct ViewerState {
     pub selection: Option<Rect>,
     /// Whether the window is currently in fullscreen mode.
     pub fullscreen: bool,
+    /// Last error message if loading failed.
+    pub load_error: Option<String>,
 }
 
 impl Default for ViewerState {
@@ -61,6 +63,7 @@ impl Default for ViewerState {
             mode:           ViewerMode::default(),
             selection:      None,
             fullscreen:     false,
+            load_error:     None,
         }
     }
 }
@@ -71,6 +74,7 @@ impl ViewerState {
     /// Load a decoded image into egui, applying `rotation` before uploading.
     /// Replaces any existing texture.
     pub fn load_image(&mut self, ctx: &Context, img: &DecodedImage, rotation: Rotation, preserve_zoom: bool) {
+        self.load_error = None;
         let (rgba, w, h) = apply_rotation(img, rotation);
         
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
@@ -89,125 +93,93 @@ impl ViewerState {
 
     /// Clear the canvas (called when no image is open, or on decode failure).
     pub fn clear(&mut self) {
-        self.texture    = None;
+        self.texture = None;
         self.image_size = Vec2::ZERO;
-        self.zoom       = 1.0;
-        self.pan        = Vec2::ZERO;
-        self.selection  = None;
+        self.pan = Vec2::ZERO;
     }
 
-    pub fn has_image(&self) -> bool { self.texture.is_some() }
-
-    // ── Zoom ─────────────────────────────────────────────────────────────
-
-    /// Toggle between fit-to-window and the last manually-set zoom level.
-    pub fn toggle_fit(&mut self, available: Vec2) {
-        if self.fit_to_window {
-            self.fit_to_window = false;
-            self.zoom          = self.saved_zoom.unwrap_or(1.0);
-        } else {
-            self.saved_zoom    = Some(self.zoom);
-            self.fit_to_window = true;
-            self.zoom          = fit_zoom(self.image_size, available);
-            self.pan           = Vec2::ZERO;
-        }
+    pub fn set_error(&mut self, err: String) {
+        self.clear();
+        self.load_error = Some(err);
     }
 
-    /// Set zoom to 100 % and centre the image.
+    /// Reset zoom to 100% (1:1 pixel mapping).
     pub fn zoom_actual_size(&mut self) {
         self.fit_to_window = false;
-        self.zoom          = 1.0;
-        self.pan           = Vec2::ZERO;
+        self.zoom = 1.0;
     }
 
-    /// Apply a multiplicative zoom delta, clamped to [0.05, 32.0].
-    ///
-    /// If `anchor_screen` is supplied (e.g. the cursor position), the point
-    /// under the cursor is held fixed during zoom.
-    pub fn apply_zoom_delta(
-        &mut self,
-        delta:         f32,
-        anchor_screen: Option<Pos2>,
-        canvas_rect:   Rect,
-    ) {
-        let old_zoom   = self.zoom;
-        self.zoom      = (self.zoom * delta).clamp(0.05, 32.0);
+    /// Toggle between "Fit to window" and the previous zoom level.
+    pub fn toggle_fit(&mut self, canvas_size: Vec2) {
+        if self.fit_to_window {
+            self.fit_to_window = false;
+            self.zoom = self.saved_zoom.take().unwrap_or(1.0);
+        } else {
+            self.saved_zoom = Some(self.zoom);
+            self.fit_to_window = true;
+            self.recalc_fit(canvas_size);
+        }
+    }
+
+    /// Update `zoom` to fit the current `image_size` inside `canvas_size`.
+    /// Only does work if `fit_to_window` is true.
+    pub fn recalc_fit(&mut self, canvas_size: Vec2) {
+        if !self.fit_to_window || self.image_size.x <= 0.0 || self.image_size.y <= 0.0 {
+            return;
+        }
+
+        let ratio_x = canvas_size.x / self.image_size.x;
+        let ratio_y = canvas_size.y / self.image_size.y;
+        
+        // Use the smaller ratio to ensure the whole image fits.
+        self.zoom = ratio_x.min(ratio_y).min(1.0); // Don't upscale in fit mode
+    }
+
+    pub fn apply_zoom_delta(&mut self, delta: f32, cursor: Option<egui::Pos2>, canvas: Rect) {
         self.fit_to_window = false;
+        let old_zoom = self.zoom;
+        self.zoom = (self.zoom * delta).clamp(0.01, 50.0);
 
-        if let Some(anchor) = anchor_screen {
-            // The image center is canvas_rect.center() + self.pan.
-            // We want the point under the anchor to stay under the anchor after scaling.
-            let image_centre = canvas_rect.center() + self.pan;
-            let offset       = anchor - image_centre;
-            let correction   = offset * (1.0 - self.zoom / old_zoom);
-            self.pan        += correction;
+        if let Some(c) = cursor {
+            // Zoom toward cursor: adjust pan so the pixel under the cursor stays put.
+            let center    = canvas.center();
+            let relative  = c - center - self.pan;
+            let pixel_pos = relative / old_zoom;
+            self.pan      = c - center - (pixel_pos * self.zoom);
         }
     }
 
-    /// Recalculate the fit-to-window zoom. Must be called every frame.
-    pub fn recalc_fit(&mut self, available: Vec2) {
-        if self.fit_to_window && self.image_size != Vec2::ZERO {
-            self.zoom = fit_zoom(self.image_size, available);
-        }
-    }
-
-    /// The display size of the current image at the current zoom level.
-    pub fn display_size(&self) -> Vec2 {
-        self.image_size * self.zoom
-    }
-
-    /// The rectangle in which the image should be drawn, centred in `canvas`.
+    /// Returns the screen-space rectangle where the image should be painted.
     pub fn image_rect(&self, canvas: Rect) -> Rect {
-        let size   = self.display_size();
-        let offset = (canvas.size() - size) * 0.5 + self.pan;
-        Rect::from_min_size(canvas.min + offset, size)
+        let size = self.image_size * self.zoom;
+        Rect::from_center_size(canvas.center() + self.pan, size)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Compute the zoom level that makes `image_size` fit entirely within
-/// `available`, preserving aspect ratio.
-pub fn fit_zoom(image_size: Vec2, available: Vec2) -> f32 {
-    if image_size.x == 0.0 || image_size.y == 0.0
-        || available.x == 0.0 || available.y == 0.0
-    {
-        return 1.0;
-    }
-    (available.x / image_size.x).min(available.y / image_size.y)
-}
-
-/// Apply `rotation` to `img`, returning new RGBA pixels and dimensions.
 fn apply_rotation(img: &DecodedImage, rotation: Rotation) -> (Vec<u8>, usize, usize) {
-    use image::imageops;
-    
-    // Wrap raw pixels in an ImageBuffer for processing
-    // NOTE: In a performance-critical app, we might want to avoid cloning
-    // img.rgba here if we can rotate in-place or if we cache the rotated version.
-    let buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
-        img.width, img.height, img.rgba.clone()
-    ).expect("Invalid image buffer");
-
-    match rotation {
-        Rotation::None  => (img.rgba.clone(), img.width as usize, img.height as usize),
-        Rotation::Cw90  => {
-            let res = imageops::rotate90(&buffer);
-            let (w, h) = (res.width() as usize, res.height() as usize);
-            (res.into_raw(), w, h)
-        }
-        Rotation::Cw180 => {
-            let res = imageops::rotate180(&buffer);
-            let (w, h) = (res.width() as usize, res.height() as usize);
-            (res.into_raw(), w, h)
-        }
-        Rotation::Cw270 => {
-            let res = imageops::rotate270(&buffer);
-            let (w, h) = (res.width() as usize, res.height() as usize);
-            (res.into_raw(), w, h)
-        }
+    if rotation.is_identity() {
+        return (img.rgba.clone(), img.width as usize, img.height as usize);
     }
+
+    // We use the `image` crate to perform the rotation since it's already a dependency.
+    let mut dimg = image::DynamicImage::ImageRgba8(
+        image::ImageBuffer::from_raw(img.width, img.height, img.rgba.clone()).unwrap()
+    );
+
+    dimg = match rotation {
+        Rotation::None  => dimg,
+        Rotation::Cw90  => dimg.rotate90(),
+        Rotation::Cw180 => dimg.rotate180(),
+        Rotation::Cw270 => dimg.rotate270(),
+    };
+
+    let rgba = dimg.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    (rgba.into_raw(), w as usize, h as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -218,84 +190,84 @@ fn apply_rotation(img: &DecodedImage, rotation: Rotation) -> (Vec<u8>, usize, us
 mod tests {
     use super::*;
 
-    fn canvas() -> Rect {
-        Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))
-    }
-
-    #[test]
-    fn fit_zoom_respects_narrower_dimension() {
-        // 1000×500 image in a 500×500 canvas → limited by width → 0.5
-        let z = fit_zoom(Vec2::new(1000.0, 500.0), Vec2::new(500.0, 500.0));
-        assert!((z - 0.5).abs() < 1e-6, "z = {z}");
-    }
-
-    #[test]
-    fn fit_zoom_respects_shorter_dimension() {
-        // 200×400 image in a 800×600 canvas → limited by height → 1.5
-        let z = fit_zoom(Vec2::new(200.0, 400.0), Vec2::new(800.0, 600.0));
-        assert!((z - 1.5).abs() < 1e-6, "z = {z}");
-    }
-
-    #[test]
-    fn fit_zoom_handles_zero_sizes() {
-        assert_eq!(fit_zoom(Vec2::ZERO, Vec2::new(800.0, 600.0)), 1.0);
-        assert_eq!(fit_zoom(Vec2::new(800.0, 600.0), Vec2::ZERO), 1.0);
-    }
-
     #[test]
     fn new_viewer_has_no_image() {
-        assert!(!ViewerState::new().has_image());
-    }
-
-    #[test]
-    fn zoom_is_clamped_at_maximum() {
-        let mut v = ViewerState::new();
-        for _ in 0..100 {
-            v.apply_zoom_delta(2.0, None, canvas());
-        }
-        assert!(v.zoom <= 32.0, "zoom = {}", v.zoom);
-    }
-
-    #[test]
-    fn zoom_is_clamped_at_minimum() {
-        let mut v = ViewerState::new();
-        for _ in 0..100 {
-            v.apply_zoom_delta(0.1, None, canvas());
-        }
-        assert!(v.zoom >= 0.05, "zoom = {}", v.zoom);
+        let v = ViewerState::new();
+        assert!(v.texture.is_none());
+        assert_eq!(v.image_size, Vec2::ZERO);
     }
 
     #[test]
     fn zoom_actual_size_resets_to_100_percent() {
-        let mut v  = ViewerState::new();
-        v.apply_zoom_delta(3.0, None, canvas());
+        let mut v = ViewerState::new();
+        v.zoom = 5.0;
         v.zoom_actual_size();
         assert_eq!(v.zoom, 1.0);
         assert!(!v.fit_to_window);
     }
 
     #[test]
+    fn zoom_is_clamped_at_minimum() {
+        let mut v = ViewerState::new();
+        v.apply_zoom_delta(0.00001, None, Rect::NOTHING);
+        assert!(v.zoom >= 0.01);
+    }
+
+    #[test]
+    fn zoom_is_clamped_at_maximum() {
+        let mut v = ViewerState::new();
+        v.zoom = 40.0;
+        v.apply_zoom_delta(10.0, None, Rect::NOTHING);
+        assert!(v.zoom <= 50.0);
+    }
+
+    #[test]
     fn toggle_fit_switches_modes_and_restores_zoom() {
-        let available = Vec2::new(800.0, 600.0);
-        let mut v     = ViewerState::new();
-        v.image_size  = Vec2::new(400.0, 300.0);
-        v.fit_to_window = false;
-        v.zoom          = 2.5;
-
-        v.toggle_fit(available);  // → fit
+        let mut v = ViewerState::new();
+        v.image_size = Vec2::new(1000.0, 1000.0);
+        v.zoom = 0.5;
+        
+        v.toggle_fit(Vec2::new(100.0, 100.0));
         assert!(v.fit_to_window);
-
-        v.toggle_fit(available);  // → back to 2.5
+        assert_eq!(v.zoom, 0.1); // fits 1000 into 100
+        
+        v.toggle_fit(Vec2::new(100.0, 100.0));
         assert!(!v.fit_to_window);
-        assert!((v.zoom - 2.5).abs() < 1e-6, "zoom = {}", v.zoom);
+        assert_eq!(v.zoom, 0.5); // restored
+    }
+
+    #[test]
+    fn fit_zoom_handles_zero_sizes() {
+        let mut v = ViewerState::new();
+        v.fit_to_window = true;
+        v.recalc_fit(Vec2::ZERO);
+        assert_eq!(v.zoom, 1.0); // unchanged from default
+    }
+
+    #[test]
+    fn fit_zoom_respects_shorter_dimension() {
+        let mut v = ViewerState::new();
+        v.image_size = Vec2::new(1000.0, 1000.0);
+        v.fit_to_window = true;
+        v.recalc_fit(Vec2::new(500.0, 200.0));
+        assert_eq!(v.zoom, 0.2); // constrained by height
+    }
+
+    #[test]
+    fn fit_zoom_respects_narrower_dimension() {
+        let mut v = ViewerState::new();
+        v.image_size = Vec2::new(1000.0, 1000.0);
+        v.fit_to_window = true;
+        v.recalc_fit(Vec2::new(200.0, 500.0));
+        assert_eq!(v.zoom, 0.2); // constrained by width
     }
 
     #[test]
     fn image_rect_is_centred_when_pan_is_zero() {
-        let canvas    = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let mut v     = ViewerState::new();
-        v.image_size  = Vec2::new(400.0, 300.0);
-        v.zoom        = 1.0;
+        let mut v    = ViewerState::new();
+        v.image_size = Vec2::new(400.0, 300.0);
+        v.zoom       = 1.0;
+        let canvas   = Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(800.0, 600.0));
         v.pan         = Vec2::ZERO;
 
         let rect = v.image_rect(canvas);
