@@ -246,19 +246,84 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    // thumb-rs is a pure-Rust crate that extracts and decodes the embedded
-    // preview/thumbnail from many RAW formats, including .CR3 and .ARW.
-    // It returns the decoded RGBA pixels directly.
-    // Scale 4 = 1024px (4 * 256), which is a good balance for fast vetting.
-    let thumbnail = thumb_rs::get_thumbnail(path, thumb_rs::ThumbnailScale(4))
-        .map_err(|e| format!("failed to extract raw preview: {e:?}"))?;
+    let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase());
     
-    Ok(DecodedImage {
-        rgba:   thumbnail.rgba,
-        width:  thumbnail.width,
-        height: thumbnail.height,
-    })
+    // Special handling for modern Canon .CR3 (ISO BMFF container)
+    if ext == Some("cr3".to_string()) {
+        return load_cr3(path);
+    }
+
+    // Standard RAW formats via rawloader
+    let raw = rawloader::decode_file(path)
+        .map_err(|e| format!("rawloader decode failed: {e:?}"))?;
+    
+    let width  = raw.width;
+    let height = raw.height;
+    
+    match &raw.data {
+        rawloader::RawImageData::Integer(data) => {
+            let mut rgba = Vec::with_capacity(width * height * 4);
+            // Simple preview conversion for rawloader formats
+            if data.len() >= width * height * 3 {
+                for chunk in data.chunks_exact(3) {
+                    rgba.push((chunk[0] >> 8) as u8);
+                    rgba.push((chunk[1] >> 8) as u8);
+                    rgba.push((chunk[2] >> 8) as u8);
+                    rgba.push(255);
+                }
+                Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
+            } else {
+                Err("Raw sensor data requires debayering (not yet implemented)".to_string())
+            }
+        }
+        _ => Err("Unsupported raw data format (non-integer)".to_string()),
+    }
 }
+
+fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
+    // .CR3 files are ISO BMFF containers. The high-res preview is often in a specific 'uuid' or 'trak' box.
+    // For a robust pure-Rust solution in a vetting tool, we look for the largest JPEG blob.
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    
+    // Search for JPEG magic bytes (FF D8 FF) inside the CR3 container.
+    // Modern Canon CR3s embed a full-size JPEG.
+    let mut best_match = None;
+    let mut search_pos = 0;
+    
+    while let Some(pos) = find_subsequence(&data[search_pos..], &[0xFF, 0xD8, 0xFF]) {
+        let start = search_pos + pos;
+        // Basic JPEG EOI search (FF D9)
+        if let Some(end_pos) = find_subsequence(&data[start..], &[0xFF, 0xD9]) {
+            let end = start + end_pos + 2;
+            let len = end - start;
+            // High-res previews are usually > 500KB
+            if len > best_match.map(|(s, e)| e - s).unwrap_or(0) {
+                best_match = Some((start, end));
+            }
+        }
+        search_pos = start + 3;
+        if search_pos > data.len() - 3 { break; }
+    }
+
+    if let Some((start, end)) = best_match {
+        let img = image::load_from_memory(&data[start..end])
+            .map_err(|e| format!("failed to decode extracted CR3 preview: {e}"))?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Ok(DecodedImage {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        })
+    } else {
+        Err("Could not find embedded JPEG preview in .CR3 file".to_string())
+    }
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
 
 
 fn load_svg(path: &Path) -> Result<DecodedImage, String> {
