@@ -23,22 +23,36 @@ pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
     let reader = BufReader::new(file);
     let img_reader = image::ImageReader::new(reader).with_guessed_format();
     
-    if let Ok(reader) = img_reader {
+    let mut entries = if let Ok(reader) = img_reader {
         match reader.format() {
-            Some(image::ImageFormat::Png)  => return read_png(path),
-            Some(image::ImageFormat::Jpeg) => return read_exif(path),
-            Some(image::ImageFormat::Tiff) => return read_exif(path),
-            Some(image::ImageFormat::WebP) => return read_exif(path),
-            _                              => {}
+            Some(image::ImageFormat::Png)  => read_png(path),
+            Some(image::ImageFormat::Jpeg) => read_exif(path),
+            Some(image::ImageFormat::Tiff) => read_exif(path),
+            Some(image::ImageFormat::WebP) => read_exif(path),
+            _                              => vec![],
         }
+    } else if is_raw_extension(path) {
+        read_exif(path)
+    } else {
+        vec![]
+    };
+
+    // Post-process entries for known AI formats (JSON pretty-printing, etc.)
+    for entry in &mut entries {
+        // 1. Try JSON pretty-print (ComfyUI workflow/prompt, InvokeAI metadata)
+        if entry.value.trim().starts_with('{') || entry.value.trim().starts_with('[') {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&entry.value) {
+                if let Ok(pretty) = serde_json::to_string_pretty(&val) {
+                    entry.value = pretty;
+                }
+            }
+        }
+        
+        // 2. A1111 "parameters" — usually a prompt block followed by "Steps: 20, Sampler: ..."
+        // We'll leave it as-is but ensure newlines are preserved.
     }
 
-    // Fallback for RAW formats that image crate might not sniff correctly
-    if is_raw_extension(path) {
-        return read_exif(path);
-    }
-
-    vec![]
+    entries
 }
 
 fn is_raw_extension(path: &Path) -> bool {

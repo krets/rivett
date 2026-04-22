@@ -541,14 +541,15 @@ impl RivettApp {
                             ui.heading("Metadata");
 
                             for entry in &self.metadata {
-                                // Large values (JSON, etc.) get a collapsing section.
-                                if entry.value.len() > 120 {
-                                    let preview = &entry.value[..entry.value.char_indices()
-                                        .nth(80).map(|(i, _)| i).unwrap_or(entry.value.len())];
+                                let is_multiline = entry.value.contains('\n');
+                                let is_long      = entry.value.len() > 120;
+
+                                if is_multiline || is_long {
                                     egui::CollapsingHeader::new(
                                         egui::RichText::new(&entry.key).strong()
                                     )
                                     .id_source(egui::Id::new(&entry.key))
+                                    .default_open(is_multiline && entry.key.to_lowercase() == "parameters")
                                     .show(ui, |ui| {
                                         ui.add(
                                             egui::TextEdit::multiline(
@@ -558,7 +559,6 @@ impl RivettApp {
                                             .font(egui::TextStyle::Monospace),
                                         );
                                     });
-                                    let _ = preview; // shown in header implicitly
                                 } else {
                                     ui.label(egui::RichText::new(&entry.key).strong());
                                     ui.label(&entry.value);
