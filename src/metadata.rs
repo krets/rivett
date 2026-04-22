@@ -97,6 +97,15 @@ pub fn get_orientation(path: &Path) -> Option<u32> {
     None
 }
 
+/// Returns the EXIF orientation tag from a byte buffer.
+pub fn get_orientation_from_bytes(data: &[u8]) -> Option<u32> {
+    let mut reader = std::io::Cursor::new(data);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut reader).ok()?;
+    exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
+        .value.get_uint(0)
+}
+
 // ---------------------------------------------------------------------------
 // PNG — tEXt and iTXt chunks
 // ---------------------------------------------------------------------------

@@ -271,7 +271,18 @@ fn load_raw(path: &Path) -> Result<DecodedImage, String> {
                     rgba.push((chunk[2] >> 8) as u8);
                     rgba.push(255);
                 }
-                Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
+                
+                let mut img = image::DynamicImage::ImageRgba8(
+                    image::ImageBuffer::from_raw(width as u32, height as u32, rgba).unwrap()
+                );
+                
+                if let Some(orientation) = crate::metadata::get_orientation(path) {
+                    img = apply_orientation_to_image(img, orientation);
+                }
+
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                Ok(DecodedImage { rgba: rgba.into_raw(), width, height })
             } else {
                 Err("Raw sensor data requires debayering (not yet implemented)".to_string())
             }
@@ -281,22 +292,16 @@ fn load_raw(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
-    // .CR3 files are ISO BMFF containers. The high-res preview is often in a specific 'uuid' or 'trak' box.
-    // For a robust pure-Rust solution in a vetting tool, we look for the largest JPEG blob.
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     
-    // Search for JPEG magic bytes (FF D8 FF) inside the CR3 container.
-    // Modern Canon CR3s embed a full-size JPEG.
     let mut best_match = None;
     let mut search_pos = 0;
     
     while let Some(pos) = find_subsequence(&data[search_pos..], &[0xFF, 0xD8, 0xFF]) {
         let start = search_pos + pos;
-        // Basic JPEG EOI search (FF D9)
         if let Some(end_pos) = find_subsequence(&data[start..], &[0xFF, 0xD9]) {
             let end = start + end_pos + 2;
             let len = end - start;
-            // High-res previews are usually > 500KB
             if len > best_match.map(|(s, e)| e - s).unwrap_or(0) {
                 best_match = Some((start, end));
             }
@@ -306,8 +311,15 @@ fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
     }
 
     if let Some((start, end)) = best_match {
-        let img = image::load_from_memory(&data[start..end])
+        let jpeg_bytes = &data[start..end];
+        let mut img = image::load_from_memory(jpeg_bytes)
             .map_err(|e| format!("failed to decode extracted CR3 preview: {e}"))?;
+        
+        // Extract orientation from the embedded JPEG bytes
+        if let Some(orientation) = crate::metadata::get_orientation_from_bytes(jpeg_bytes) {
+            img = apply_orientation_to_image(img, orientation);
+        }
+
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
         Ok(DecodedImage {
@@ -317,6 +329,19 @@ fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
         })
     } else {
         Err("Could not find embedded JPEG preview in .CR3 file".to_string())
+    }
+}
+
+fn apply_orientation_to_image(img: image::DynamicImage, orientation: u32) -> image::DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
     }
 }
 
