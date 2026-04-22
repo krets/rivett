@@ -1,17 +1,8 @@
 // On Windows this is a GUI application — suppress the console window entirely.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod app;
-mod db;
-mod formats;
-mod image_loader;
-mod metadata;
-mod session;
-mod settings;
-mod viewer;
-
-use app::RivettApp;
-use settings::AppSettings;
+use rivett::app::RivettApp;
+use rivett::settings::AppSettings;
 use std::path::PathBuf;
 
 fn parse_args() -> Option<PathBuf> {
