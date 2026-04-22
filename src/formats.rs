@@ -16,6 +16,7 @@ pub enum SupportedFormat {
     Gif,
     Exr,
     Svg,
+    Raw,
 }
 
 impl SupportedFormat {
@@ -36,19 +37,24 @@ impl SupportedFormat {
             "gif"                   => Some(Self::Gif),
             "exr"                   => Some(Self::Exr),
             "svg"                   => Some(Self::Svg),
+            // Common Camera Raw formats handled by LibRaw
+            "arw" | "cr2" | "cr3" | "nef" | "nrw" | "orf" | "raf" | "rw2" | "dng" => Some(Self::Raw),
             _                       => None,
         }
     }
 
     /// All known lowercase extensions, including aliases.
     pub fn all_extensions() -> &'static [&'static str] {
-        &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "exr", "svg"]
+        &[
+            "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "exr", "svg",
+            "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf", "rw2", "dng"
+        ]
     }
 
     /// `true` if this format can store rotation losslessly via metadata
     /// (EXIF orientation tag) without recompressing pixel data.
     pub fn supports_lossless_rotation_metadata(self) -> bool {
-        matches!(self, Self::Jpeg | Self::Tiff)
+        matches!(self, Self::Jpeg | Self::Tiff | Self::Raw)
     }
 
     /// Human-readable display name.
@@ -62,6 +68,7 @@ impl SupportedFormat {
             Self::Gif  => "GIF",
             Self::Exr  => "EXR",
             Self::Svg  => "SVG",
+            Self::Raw  => "RAW",
         }
     }
 }
@@ -98,6 +105,7 @@ mod tests {
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("photo.JPEG")), Some(SupportedFormat::Jpeg));
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("photo.Gif")),  Some(SupportedFormat::Gif));
         assert_eq!(SupportedFormat::from_path(&PathBuf::from("drawing.SVG")), Some(SupportedFormat::Svg));
+        assert_eq!(SupportedFormat::from_path(&PathBuf::from("camera.ARW")), Some(SupportedFormat::Raw));
     }
 
     #[test]
@@ -109,11 +117,12 @@ mod tests {
     fn jpeg_supports_lossless_rotation() {
         assert!(SupportedFormat::Jpeg.supports_lossless_rotation_metadata());
         assert!(SupportedFormat::Tiff.supports_lossless_rotation_metadata());
+        assert!(SupportedFormat::Raw.supports_lossless_rotation_metadata());
     }
 
     #[test]
     fn other_formats_do_not_support_lossless_rotation() {
-        for fmt in [SupportedFormat::Png, SupportedFormat::WebP, SupportedFormat::Bmp, SupportedFormat::Gif] {
+        for fmt in [SupportedFormat::Png, SupportedFormat::WebP, SupportedFormat::Bmp, SupportedFormat::Gif, SupportedFormat::Exr, SupportedFormat::Svg] {
             assert!(
                 !fmt.supports_lossless_rotation_metadata(),
                 "{:?} should not claim lossless rotation support",

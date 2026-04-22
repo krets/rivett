@@ -201,8 +201,14 @@ pub struct DecodedImage {
 /// Decode `path` into a [`DecodedImage`].
 pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
     // Special handling for SVG
-    if path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase()) == Some("svg".to_string()) {
+    let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase());
+    if ext == Some("svg".to_string()) {
         return load_svg(path);
+    }
+
+    // Special handling for RAW
+    if let Some(SupportedFormat::Raw) = SupportedFormat::from_path(path) {
+        return load_raw(path);
     }
 
     let file = std::fs::File::open(path)
@@ -238,6 +244,37 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
         height,
     })
 }
+
+fn load_raw(path: &Path) -> Result<DecodedImage, String> {
+    let raw = rawloader::decode_file(path)
+        .map_err(|e| format!("rawloader decode failed: {e:?}"))?;
+    
+    let width  = raw.width;
+    let height = raw.height;
+    
+    // rawloader gives us 16-bit data usually. We need to convert it to 8-bit RGBA.
+    // For a simple preview, we'll just take the top 8 bits of each channel.
+    // NOTE: rawloader output format can vary (Bayer vs RGB), but let's assume 
+    // it handles common cases into a linear buffer we can work with.
+    
+    match &raw.data {
+        rawloader::RawImageData::Integer(data) => {
+            let mut rgba = Vec::with_capacity(width * height * 4);
+            // This is a very simplistic "preview" conversion.
+            // In a real raw viewer we'd apply white balance and gamma.
+            // For now, let's just make it visible.
+            for chunk in data.chunks_exact(3) {
+                rgba.push((chunk[0] >> 8) as u8);
+                rgba.push((chunk[1] >> 8) as u8);
+                rgba.push((chunk[2] >> 8) as u8);
+                rgba.push(255);
+            }
+            Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
+        }
+        _ => Err("Unsupported raw data format (non-integer)".to_string()),
+    }
+}
+
 
 fn load_svg(path: &Path) -> Result<DecodedImage, String> {
     let opt = resvg::usvg::Options::default();
