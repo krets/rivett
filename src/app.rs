@@ -855,16 +855,28 @@ impl eframe::App for RivettApp {
                 }
             }
 
-            // Double-click: native file open dialog
+            // Double-click or click-to-copy error
             if response.double_clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Images", &[
-                        "png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif", "exr", "svg",
-                        "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf", "rw2", "dng"
-                    ])
-                    .pick_file()
-                {
-                    self.open_image(path, ctx);
+                if let Some(ref err) = self.viewer.load_error {
+                    ctx.copy_text(err.clone());
+                    self.toast("Error message copied to clipboard");
+                } else {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Images", &[
+                            "png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif", "exr", "svg",
+                            "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf", "rw2", "dng"
+                        ])
+                        .pick_file()
+                    {
+                        self.open_image(path, ctx);
+                    }
+                }
+            }
+
+            if response.clicked() && self.viewer.load_error.is_some() {
+                if let Some(ref err) = self.viewer.load_error {
+                    ctx.copy_text(err.clone());
+                    self.toast("Error message copied to clipboard");
                 }
             }
 
