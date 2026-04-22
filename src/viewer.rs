@@ -70,7 +70,7 @@ impl ViewerState {
 
     /// Load a decoded image into egui, applying `rotation` before uploading.
     /// Replaces any existing texture.
-    pub fn load_image(&mut self, ctx: &Context, img: &DecodedImage, rotation: Rotation) {
+    pub fn load_image(&mut self, ctx: &Context, img: &DecodedImage, rotation: Rotation, preserve_zoom: bool) {
         let (rgba, w, h) = apply_rotation(img, rotation);
         
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
@@ -81,7 +81,8 @@ impl ViewerState {
             TextureOptions::default(),
         ));
 
-        if self.fit_to_window {
+        if !preserve_zoom {
+            self.fit_to_window = true;
             self.pan = Vec2::ZERO;
         }
     }

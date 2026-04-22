@@ -135,10 +135,10 @@ impl RivettApp {
                 Err(e) => log::warn!("failed to scan directory: {e}"),
             }
         }
-        self.load_current(ctx);
+        self.load_current(ctx, false);
     }
 
-    fn load_current(&mut self, ctx: &Context) {
+    fn load_current(&mut self, ctx: &Context, preserve_zoom: bool) {
         let path = match self.listing.as_ref().and_then(|l| l.current().cloned()) {
             Some(p) => p,
             None => {
@@ -161,13 +161,13 @@ impl RivettApp {
 
         // 1. Try cache
         if let Some(img) = self.image_cache.get(&path) {
-            self.viewer.load_image(ctx, img, rotation);
+            self.viewer.load_image(ctx, img, rotation, preserve_zoom);
         } else {
             // 2. Load from disk
             match load_image(&path) {
                 Ok(img) => {
                     self.image_cache.insert(path.clone(), img.clone());
-                    self.viewer.load_image(ctx, &img, rotation);
+                    self.viewer.load_image(ctx, &img, rotation, preserve_zoom);
                 }
                 Err(e)  => {
                     log::warn!("{e}");
@@ -216,7 +216,7 @@ impl RivettApp {
 
     // ── Navigation ────────────────────────────────────────────────────────
 
-    fn navigate_next(&mut self, ctx: &Context) {
+    fn navigate_next(&mut self, ctx: &Context, preserve_zoom: bool) {
         let Some(ref mut listing) = self.listing else { return };
         // Skip past ignored images.
         let mut moved = false;
@@ -227,10 +227,10 @@ impl RivettApp {
                 if !self.session.is_ignored(p) { break; }
             }
         }
-        if moved { self.load_current(ctx); }
+        if moved { self.load_current(ctx, preserve_zoom); }
     }
 
-    fn navigate_prev(&mut self, ctx: &Context) {
+    fn navigate_prev(&mut self, ctx: &Context, preserve_zoom: bool) {
         let Some(ref mut listing) = self.listing else { return };
         let mut moved = false;
         loop {
@@ -240,7 +240,7 @@ impl RivettApp {
                 if !self.session.is_ignored(p) { break; }
             }
         }
-        if moved { self.load_current(ctx); }
+        if moved { self.load_current(ctx, preserve_zoom); }
     }
 
     // ── Hide (ignore) ─────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ impl RivettApp {
         self.session.ignore_image(path.clone());
         self.toast(format!("Hidden: {}", path.file_name()
             .and_then(|n| n.to_str()).unwrap_or("?")));
-        self.navigate_next(ctx);
+        self.navigate_next(ctx, false);
     }
 
     // ── Rating / bookmarks ────────────────────────────────────────────────
@@ -310,7 +310,7 @@ impl RivettApp {
         ) {
             if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
                 let _ = db.set_rotation(dir.id, &fname, new_rot.as_u8());
-                self.load_current(ctx);
+                self.load_current(ctx, false);
             }
         }
     }
@@ -338,7 +338,7 @@ impl RivettApp {
                 self.current_record = None;
                 self.metadata       = vec![];
                 self.viewer.clear();
-                self.load_current(ctx);
+                self.load_current(ctx, false);
             }
             Err(e) => {
                 self.toast(format!("Delete failed: {e}"));
@@ -360,7 +360,7 @@ impl RivettApp {
                 self.listing = Some(fresh);
             }
         }
-        self.load_current(ctx);
+        self.load_current(ctx, false);
     }
 
     // ── Open in file manager ──────────────────────────────────────────────
@@ -400,11 +400,14 @@ impl RivettApp {
         }
 
         // Navigation
+        let shift = input.modifiers.shift;
+        let preserve_zoom = shift;
+
         if input.key_pressed(Key::ArrowRight) || input.key_pressed(Key::PageDown) {
-            self.navigate_next(ctx);
+            self.navigate_next(ctx, preserve_zoom);
         }
         if input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::PageUp) {
-            self.navigate_prev(ctx);
+            self.navigate_prev(ctx, preserve_zoom);
         }
 
         // Info panel
@@ -577,7 +580,7 @@ impl RivettApp {
             if let Err(e) = listing.refresh(sort, db) {
                 log::warn!("failed to refresh directory listing: {e}");
             }
-            self.load_current(ctx);
+            self.load_current(ctx, false);
         }
     }
 
@@ -595,7 +598,7 @@ impl RivettApp {
         match DirectoryListing::scan_global(db, filter) {
             Ok(listing) => {
                 self.listing = Some(listing);
-                self.load_current(ctx);
+                self.load_current(ctx, false);
             }
             Err(e) => log::warn!("failed to scan global ratings: {e}"),
         }
@@ -608,6 +611,25 @@ impl RivettApp {
         let has_db    = self.db.is_some();
 
         response.context_menu(|ui| {
+            let next_shortcut = "Shift+Right";
+            let prev_shortcut = "Shift+Left";
+            let zoom_hint = "(Shift to preserve zoom)";
+
+            if ui.add_enabled(has_image, egui::Button::new(format!("Next Image {zoom_hint}"))
+                .shortcut_text(next_shortcut)).clicked() 
+            {
+                self.navigate_next(ctx, true);
+                ui.close_menu();
+            }
+            if ui.add_enabled(has_image, egui::Button::new(format!("Previous Image {zoom_hint}"))
+                .shortcut_text(prev_shortcut)).clicked() 
+            {
+                self.navigate_prev(ctx, true);
+                ui.close_menu();
+            }
+
+            ui.separator();
+
             if ui.add_enabled(has_image, egui::Button::new("Bookmark").shortcut_text("B")).clicked() {
                 self.toggle_bookmark();
                 ui.close_menu();
@@ -740,6 +762,13 @@ impl RivettApp {
                 } else {
                     self.viewer.toggle_fit(ctx.screen_rect().size());
                 }
+                ui.close_menu();
+            }
+
+            ui.separator();
+
+            if ui.add(egui::Button::new("Reset Session").shortcut_text("Ctrl+Shift+R")).clicked() {
+                self.hard_refresh(ctx);
                 ui.close_menu();
             }
         });
