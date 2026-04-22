@@ -6,6 +6,19 @@ edition     = "2021"
 description = "Rust Image Vetting Tool — fast, keyboard-driven image viewer"
 license     = "MIT"
 
+[package.metadata.bundle]
+name = "Rivett"
+identifier = "com.rivett.rivett"
+icon = ["resources/icon.png"]
+version = "0.1.0"
+resources = []
+copyright = "Copyright © 2026 Rivett Developers. All rights reserved."
+category = "Graphics and Design"
+short_description = "Fast image vetting tool."
+long_description = """
+Rivett is a fast, keyboard-driven image viewer designed for quick sorting and vetting of large image collections.
+"""
+
 [[bin]]
 name = "rivett"
 path = "src/main.rs"

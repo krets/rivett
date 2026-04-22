@@ -13,32 +13,78 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        
       - name: Install cargo-wix
         run: cargo install cargo-wix --version 0.3.9
-        
       - name: Build Rivett
         run: cargo build --release
-        
       - name: Build MSI Installer
         run: cargo wix --no-build --nocapture
-        
-      - name: Package Release
+      - name: Package Portable ZIP
         run: |
           mkdir dist
           cp target/release/rivett.exe dist/
           cp README.md dist/
           Compress-Archive -Path dist/* -DestinationPath rivett-windows-portable.zip
-          
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             rivett-windows-portable.zip
             target/wix/*.msi
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev squashfs-tools libwayland-dev libxkbcommon-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+      - name: Build Bundles
+        run: |
+          cargo bundle --release --format appimage
+          cargo bundle --release --format deb
+      - name: Upload Linux Bundles
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+      - name: Build DMG
+        run: cargo bundle --release --format osx
+      - name: Create DMG (manual step if needed)
+        run: |
+          # cargo-bundle creates an .app, we might want to wrap it in a DMG
+          # but for now let's see what it produces
+          ls -R target/release/bundle/osx/
+      - name: Upload macOS Bundle
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/bundle/osx/*.app
           draft: false
           prerelease: false
         env:
