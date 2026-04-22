@@ -150,8 +150,14 @@ impl RivettApp {
             }
         };
 
-        let rotation = self.session.rotation_for(&path);
         self.current_path = Some(path.clone());
+        
+        // Fetch the DB record (ratings, bookmark, note, rotation).
+        self.refresh_record();
+
+        let rotation = self.current_record.as_ref()
+            .map(|r| crate::session::Rotation::from_u8(r.rotation))
+            .unwrap_or_default();
 
         // 1. Try cache
         if let Some(img) = self.image_cache.get(&path) {
@@ -196,9 +202,6 @@ impl RivettApp {
 
         // Read PNG/EXIF metadata for the info panel.
         self.metadata = read_metadata(&path);
-
-        // Fetch the DB record (ratings, bookmark, note).
-        self.refresh_record();
     }
 
     fn refresh_record(&mut self) {
@@ -287,6 +290,27 @@ impl RivettApp {
                 let _ = db.set_bookmark(dir.id, &fname, !current);
                 self.toast(if current { "Bookmark removed" } else { "Bookmarked ★" });
                 self.refresh_record();
+            }
+        }
+    }
+
+    fn rotate_current(&mut self, cw: bool, ctx: &Context) {
+        let Some(path) = self.current_path.clone() else { return };
+        let Some(db)   = &self.db              else { return };
+        
+        let new_rot = if cw {
+            self.session.rotate_cw(path.clone())
+        } else {
+            self.session.rotate_ccw(path.clone())
+        };
+
+        if let (Some(dir_str), Some(fname)) = (
+            path.parent().map(|p| p.to_string_lossy().into_owned()),
+            path.file_name().and_then(|n| n.to_str()).map(str::to_string),
+        ) {
+            if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
+                let _ = db.set_rotation(dir.id, &fname, new_rot.as_u8());
+                self.load_current(ctx);
             }
         }
     }
@@ -407,16 +431,10 @@ impl RivettApp {
 
         // Rotation
         if input.key_pressed(Key::OpenBracket) {
-            if let Some(path) = self.current_path.clone() {
-                self.session.rotate_ccw(path);
-                self.load_current(ctx);
-            }
+            self.rotate_current(false, ctx);
         }
         if input.key_pressed(Key::CloseBracket) {
-            if let Some(path) = self.current_path.clone() {
-                self.session.rotate_cw(path);
-                self.load_current(ctx);
-            }
+            self.rotate_current(true, ctx);
         }
 
         // Zoom via keyboard
@@ -681,17 +699,11 @@ impl RivettApp {
             ui.separator();
 
             if ui.add_enabled(has_image, egui::Button::new("Rotate Clockwise").shortcut_text("]")).clicked() {
-                if let Some(path) = self.current_path.clone() {
-                    self.session.rotate_cw(path);
-                    self.load_current(ctx);
-                }
+                self.rotate_current(true, ctx);
                 ui.close_menu();
             }
             if ui.add_enabled(has_image, egui::Button::new("Rotate Counter-Clockwise").shortcut_text("[")).clicked() {
-                if let Some(path) = self.current_path.clone() {
-                    self.session.rotate_ccw(path);
-                    self.load_current(ctx);
-                }
+                self.rotate_current(false, ctx);
                 ui.close_menu();
             }
 

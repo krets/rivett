@@ -2,9 +2,11 @@
 //!
 //! Currently reads PNG `tEXt` and `iTXt` chunks, which is where ComfyUI,
 //! Automatic1111, and InvokeAI embed their workflow/prompt data.
-//! EXIF (JPEG/TIFF) support is a TODO.
+//! EXIF (JPEG/TIFF) support is implemented via the `exif` crate.
 
 use std::path::Path;
+use std::fs::File;
+use std::io::BufReader;
 
 /// A single key/value metadata entry.
 #[derive(Debug, Clone)]
@@ -23,8 +25,23 @@ pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
         .as_deref()
     {
         Some("png")                    => read_png(path),
-        Some("jpg") | Some("jpeg")     => read_jpeg_exif(path),
+        Some("jpg") | Some("jpeg")     => read_exif(path),
+        Some("tif") | Some("tiff")     => read_exif(path),
         _                              => vec![],
+    }
+}
+
+/// Returns the EXIF orientation tag (1-8) if present.
+pub fn get_orientation(path: &Path) -> Option<u32> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut reader).ok()?;
+    
+    if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+        field.value.get_uint(0)
+    } else {
+        None
     }
 }
 
@@ -33,7 +50,7 @@ pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
 // ---------------------------------------------------------------------------
 
 fn read_png(path: &Path) -> Vec<MetaEntry> {
-    let Ok(file) = std::fs::File::open(path) else { return vec![] };
+    let Ok(file) = File::open(path) else { return vec![] };
     let decoder = png::Decoder::new(file);
     let Ok(reader) = decoder.read_info() else { return vec![] };
     let info = reader.info();
@@ -62,11 +79,21 @@ fn read_png(path: &Path) -> Vec<MetaEntry> {
 }
 
 // ---------------------------------------------------------------------------
-// JPEG — minimal EXIF via raw scan (no external crate required)
+// JPEG/TIFF — EXIF
 // ---------------------------------------------------------------------------
-// TODO: replace with kamadak-exif for full EXIF parsing.
 
-fn read_jpeg_exif(_path: &Path) -> Vec<MetaEntry> {
-    // Placeholder — EXIF parsing not yet implemented.
-    vec![]
+fn read_exif(path: &Path) -> Vec<MetaEntry> {
+    let Ok(file) = File::open(path) else { return vec![] };
+    let mut reader = BufReader::new(file);
+    let exifreader = exif::Reader::new();
+    let Ok(exif) = exifreader.read_from_container(&mut reader) else { return vec![] };
+    
+    let mut entries = Vec::new();
+    for field in exif.fields() {
+        entries.push(MetaEntry {
+            key:   field.tag.to_string(),
+            value: field.display_value().with_unit(&exif).to_string(),
+        });
+    }
+    entries
 }

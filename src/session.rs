@@ -56,6 +56,25 @@ impl Rotation {
             Self::Cw270 => 270,
         }
     }
+
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::None  => 0,
+            Self::Cw90  => 1,
+            Self::Cw180 => 2,
+            Self::Cw270 => 3,
+        }
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        match val % 4 {
+            0 => Self::None,
+            1 => Self::Cw90,
+            2 => Self::Cw180,
+            3 => Self::Cw270,
+            _ => unreachable!(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +160,9 @@ impl SessionState {
 
     /// `true` if any save-or-discard prompt should be shown before closing.
     pub fn has_pending_changes(&self) -> bool {
-        self.pending_rotations.values().any(|r| !r.is_identity())
-            || !self.pending_crops.is_empty()
+        // Rotations are now persisted immediately in this design, 
+        // so they don't count as "pending" for the close prompt anymore.
+        !self.pending_crops.is_empty()
     }
 
     /// Clear all session state (hard refresh / `Ctrl+Shift+R`).
@@ -155,14 +175,16 @@ impl SessionState {
 
     // ── Rotation ──────────────────────────────────────────────────────────
 
-    pub fn rotate_cw(&mut self, path: PathBuf) {
+    pub fn rotate_cw(&mut self, path: PathBuf) -> Rotation {
         let next = self.rotation_for(&path).rotate_cw();
         self.set_rotation(path, next);
+        next
     }
 
-    pub fn rotate_ccw(&mut self, path: PathBuf) {
+    pub fn rotate_ccw(&mut self, path: PathBuf) -> Rotation {
         let next = self.rotation_for(&path).rotate_ccw();
         self.set_rotation(path, next);
+        next
     }
 
     pub fn set_rotation(&mut self, path: PathBuf, rotation: Rotation) {
@@ -251,28 +273,18 @@ mod tests {
         assert_eq!(Rotation::Cw270.degrees(), 270);
     }
 
+    #[test]
+    fn rotation_u8_roundtrip() {
+        for i in 0..4 {
+            assert_eq!(Rotation::from_u8(i).as_u8(), i);
+        }
+    }
+
     // ── SessionState ─────────────────────────────────────────────────────
 
     #[test]
     fn new_session_has_no_pending_changes() {
         assert!(!SessionState::new(SortOrder::Name).has_pending_changes());
-    }
-
-    #[test]
-    fn rotation_creates_pending_change() {
-        let mut s = SessionState::new(SortOrder::Name);
-        s.rotate_cw(p("/img.jpg"));
-        assert!(s.has_pending_changes());
-    }
-
-    #[test]
-    fn rotating_back_to_identity_removes_entry() {
-        let mut s = SessionState::new(SortOrder::Name);
-        let path = p("/img.jpg");
-        s.rotate_cw(path.clone());
-        s.rotate_ccw(path.clone());
-        assert!(!s.has_pending_changes());
-        assert!(!s.pending_rotations.contains_key(&path));
     }
 
     #[test]

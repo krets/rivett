@@ -224,8 +224,23 @@ pub struct DecodedImage {
 
 /// Decode `path` into a [`DecodedImage`].
 pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
-    let img = image::open(path)
+    let mut img = image::open(path)
         .map_err(|e| format!("could not decode {}: {e}", path.display()))?;
+    
+    // Apply EXIF orientation if applicable
+    if let Some(orientation) = crate::metadata::get_orientation(path) {
+        img = match orientation {
+            2 => img.fliph(),
+            3 => img.rotate180(),
+            4 => img.flipv(),
+            5 => img.rotate90().fliph(),
+            6 => img.rotate90(),
+            7 => img.rotate270().fliph(),
+            8 => img.rotate270(),
+            _ => img,
+        };
+    }
+
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok(DecodedImage {

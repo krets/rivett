@@ -2,7 +2,7 @@
 //! records. Opened in WAL mode for graceful concurrent-instance behaviour.
 //!
 //! Sparse storage: only images that have at least one of (rating, bookmark,
-//! note) produce a row in the `images` table. Rows that become empty are
+//! note, rotation) produce a row in the `images` table. Rows that become empty are
 //! deleted automatically by [`Database::gc_empty_record`].
 
 use rusqlite::{params, Connection, Result};
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS images (
     file_modified_at    INTEGER NOT NULL DEFAULT 0,
     rating              INTEGER,
     bookmarked          INTEGER NOT NULL DEFAULT 0,
+    rotation            INTEGER NOT NULL DEFAULT 0,
     note                TEXT,
     created_at          INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL,
@@ -70,6 +71,7 @@ pub struct ImageRecord {
     pub file_modified_at: i64,
     pub rating:           Option<u8>,
     pub bookmarked:       bool,
+    pub rotation:         u8,
     pub note:             Option<String>,
     pub created_at:       i64,
     pub updated_at:       i64,
@@ -90,6 +92,7 @@ impl Database {
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.initialise()?;
+        db.migrate()?;
         Ok(db)
     }
 
@@ -105,6 +108,15 @@ impl Database {
         self.conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         self.conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         self.conn.execute_batch(SCHEMA_SQL)?;
+        Ok(())
+    }
+
+    fn migrate(&self) -> Result<()> {
+        // Add rotation column if it doesn't exist
+        let _ = self.conn.execute(
+            "ALTER TABLE images ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(())
     }
 
@@ -177,7 +189,7 @@ impl Database {
         query_opt(
             &self.conn,
             "SELECT id, directory_id, filename, file_size, file_modified_at,
-                    rating, bookmarked, note, created_at, updated_at
+                    rating, bookmarked, rotation, note, created_at, updated_at
              FROM images WHERE directory_id = ?1 AND filename = ?2",
             params![directory_id, filename],
             |row| map_image_row(row, 0),
@@ -187,7 +199,7 @@ impl Database {
     pub fn get_images(&self, directory_id: i64) -> Result<Vec<ImageRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, directory_id, filename, file_size, file_modified_at,
-                    rating, bookmarked, note, created_at, updated_at
+                    rating, bookmarked, rotation, note, created_at, updated_at
              FROM images WHERE directory_id = ?1",
         )?;
         let result: Result<Vec<_>> = stmt.query_map([directory_id], |row| map_image_row(row, 0))?.collect();
@@ -214,6 +226,16 @@ impl Database {
         self.gc_empty_record(directory_id, filename)
     }
 
+    pub fn set_rotation(&self, directory_id: i64, filename: &str, rotation: u8) -> Result<()> {
+        self.ensure_image_exists(directory_id, filename)?;
+        self.conn.execute(
+            "UPDATE images SET rotation = ?1, updated_at = ?2
+             WHERE directory_id = ?3 AND filename = ?4",
+            params![rotation as i64, Self::now(), directory_id, filename],
+        )?;
+        self.gc_empty_record(directory_id, filename)
+    }
+
     pub fn set_note(&self, directory_id: i64, filename: &str, note: Option<&str>) -> Result<()> {
         self.ensure_image_exists(directory_id, filename)?;
         self.conn.execute(
@@ -230,8 +252,8 @@ impl Database {
         self.conn.execute(
             "INSERT OR IGNORE INTO images
              (directory_id, filename, file_size, file_modified_at,
-              rating, bookmarked, created_at, updated_at)
-             VALUES (?1, ?2, 0, 0, NULL, 0, ?3, ?3)",
+              rating, bookmarked, rotation, created_at, updated_at)
+             VALUES (?1, ?2, 0, 0, NULL, 0, 0, ?3, ?3)",
             params![directory_id, filename, now],
         )?;
         Ok(())
@@ -242,7 +264,7 @@ impl Database {
         self.conn.execute(
             "DELETE FROM images
              WHERE directory_id = ?1 AND filename = ?2
-               AND rating IS NULL AND bookmarked = 0
+               AND rating IS NULL AND bookmarked = 0 AND rotation = 0
                AND (note IS NULL OR note = '')",
             params![directory_id, filename],
         )?;
@@ -265,7 +287,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT d.path,
                     i.id, i.directory_id, i.filename, i.file_size,
-                    i.file_modified_at, i.rating, i.bookmarked, i.note,
+                    i.file_modified_at, i.rating, i.bookmarked, i.rotation, i.note,
                     i.created_at, i.updated_at
              FROM images i JOIN directories d ON i.directory_id = d.id
              WHERE i.bookmarked = 1
@@ -283,7 +305,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT d.path,
                     i.id, i.directory_id, i.filename, i.file_size,
-                    i.file_modified_at, i.rating, i.bookmarked, i.note,
+                    i.file_modified_at, i.rating, i.bookmarked, i.rotation, i.note,
                     i.created_at, i.updated_at
              FROM images i JOIN directories d ON i.directory_id = d.id
              WHERE i.rating IS NOT NULL
@@ -306,7 +328,7 @@ impl Database {
         let query = format!(
             "SELECT d.path,
                     i.id, i.directory_id, i.filename, i.file_size,
-                    i.file_modified_at, i.rating, i.bookmarked, i.note,
+                    i.file_modified_at, i.rating, i.bookmarked, i.rotation, i.note,
                     i.created_at, i.updated_at
              FROM images i JOIN directories d ON i.directory_id = d.id
              WHERE i.rating {} ?1
@@ -368,9 +390,10 @@ fn map_image_row(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ima
         file_modified_at: row.get(offset + 4)?,
         rating:           row.get::<_, Option<i64>>(offset + 5)?.map(|r| r as u8),
         bookmarked:       row.get::<_, i64>(offset + 6)? != 0,
-        note:             row.get(offset + 7)?,
-        created_at:       row.get(offset + 8)?,
-        updated_at:       row.get(offset + 9)?,
+        rotation:         row.get::<_, i64>(offset + 7)? as u8,
+        note:             row.get(offset + 8)?,
+        created_at:       row.get(offset + 9)?,
+        updated_at:       row.get(offset + 10)?,
     })
 }
 
@@ -506,5 +529,14 @@ mod tests {
     #[test]
     fn missing_setting_returns_none() {
         assert!(db().get_setting("no_such_key").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_and_get_rotation() {
+        let db  = db();
+        let dir = db.upsert_directory_by_path("/photos").unwrap();
+        db.set_rotation(dir.id, "img.jpg", 1).unwrap();
+        let img = db.get_image(dir.id, "img.jpg").unwrap().unwrap();
+        assert_eq!(img.rotation, 1);
     }
 }

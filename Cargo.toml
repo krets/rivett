@@ -58,6 +58,7 @@ uuid        = { version = "1", features = ["v4"] }
 dirs        = "5"   # platform config/data directories
 rfd         = "0.14"  # native file/folder dialogs
 png         = "0.17"  # PNG chunk access for metadata (already transitive via image)
+exif        = { package = "kamadak-exif", version = "0.6" }
 
 # ---------------------------------------------------------------------------
 # Dev / test dependencies
