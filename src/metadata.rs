@@ -6,7 +6,7 @@
 
 use std::path::Path;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 
 /// A single key/value metadata entry.
 #[derive(Debug, Clone)]
@@ -47,9 +47,6 @@ pub fn read_metadata(path: &Path) -> Vec<MetaEntry> {
                 }
             }
         }
-        
-        // 2. A1111 "parameters" — usually a prompt block followed by "Steps: 20, Sampler: ..."
-        // We'll leave it as-is but ensure newlines are preserved.
     }
 
     entries
@@ -85,16 +82,43 @@ pub fn get_orientation(path: &Path) -> Option<u32> {
         }
     }
 
+    // Fallback: Deep scan for RAW files or files with unknown formats.
+    // .CR3 and some other formats store EXIF in sub-containers that standard readers might skip.
     if is_raw {
-        let file = File::open(path).ok()?;
-        let mut reader = BufReader::new(file);
-        let exifreader = exif::Reader::new();
-        let exif = exifreader.read_from_container(&mut reader).ok()?;
-        return exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
-            .value.get_uint(0);
+        if let Ok(orientation) = deep_scan_orientation(path) {
+            return Some(orientation);
+        }
     }
 
     None
+}
+
+/// Scans the first 128KB of a file for TIFF magic bytes and tries to extract orientation.
+fn deep_scan_orientation(path: &Path) -> Result<u32, ()> {
+    let mut file = File::open(path).map_err(|_| ())?;
+    let mut buffer = vec![0u8; 128 * 1024]; // Metadata is usually in the first 128KB
+    let bytes_read = file.read(&mut buffer).map_err(|_| ())?;
+    let data = &buffer[..bytes_read];
+
+    // Search for TIFF headers: "II\x2a\x00" (little endian) or "MM\x00\x2a" (big endian)
+    let headers = [
+        [0x49, 0x49, 0x2A, 0x00], // Little-Endian
+        [0x4D, 0x4D, 0x00, 0x2A], // Big-Endian
+    ];
+
+    for header in headers {
+        let mut search_pos = 0;
+        while let Some(pos) = data[search_pos..].windows(4).position(|w| w == header) {
+            let start = search_pos + pos;
+            if let Some(orientation) = get_orientation_from_bytes(&data[start..]) {
+                return Ok(orientation);
+            }
+            search_pos = start + 4;
+            if search_pos > data.len() - 4 { break; }
+        }
+    }
+
+    Err(())
 }
 
 /// Returns the EXIF orientation tag from a byte buffer.
@@ -125,8 +149,6 @@ fn read_png(path: &Path) -> Vec<MetaEntry> {
     }
 
     for chunk in &info.utf8_text {
-        // `text` may be None if the chunk is compressed — use the raw bytes
-        // as a fallback.  In practice ComfyUI always uses uncompressed iTXt.
         let value = chunk.get_text().unwrap_or_default();
         if !value.is_empty() {
             entries.push(MetaEntry {
