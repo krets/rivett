@@ -771,6 +771,19 @@ impl RivettApp {
                 self.hard_refresh(ctx);
                 ui.close_menu();
             }
+
+            ui.separator();
+
+            ui.vertical_centered(|ui| {
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(format!("Rivett v{}", env!("CARGO_PKG_VERSION")))
+                    .small()
+                    .color(egui::Color32::from_gray(120)));
+                ui.hyperlink_to(
+                    egui::RichText::new("github.com/krets/rivett").small(),
+                    "https://github.com/krets/rivett"
+                );
+            });
         });
     }
 }
