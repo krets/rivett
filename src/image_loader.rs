@@ -246,35 +246,18 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    let raw = rawler::decode_file(path)
-        .map_err(|e| format!("rawler decode failed: {e:?}"))?;
+    // thumb-rs is a pure-Rust crate that extracts and decodes the embedded
+    // preview/thumbnail from many RAW formats, including .CR3 and .ARW.
+    // It returns the decoded RGBA pixels directly.
+    // Scale 4 = 1024px (4 * 256), which is a good balance for fast vetting.
+    let thumbnail = thumb_rs::get_thumbnail(path, thumb_rs::ThumbnailScale(4))
+        .map_err(|e| format!("failed to extract raw preview: {e:?}"))?;
     
-    let width  = raw.width;
-    let height = raw.height;
-    
-    match &raw.data {
-        rawler::RawImageData::Integer(data) => {
-            let mut rgba = Vec::with_capacity(width * height * 4);
-            // This is a very simplistic "preview" conversion.
-            // rawler data depends on the sensor, but for many it's 3-channel or Bayer.
-            // Let's assume 3-channel for a start if it's already processed,
-            // or find the best way to downsample.
-            if data.len() >= width * height * 3 {
-                for chunk in data.chunks_exact(3) {
-                    rgba.push((chunk[0] >> 8) as u8);
-                    rgba.push((chunk[1] >> 8) as u8);
-                    rgba.push((chunk[2] >> 8) as u8);
-                    rgba.push(255);
-                }
-            } else {
-                // Bayer data or other — for now just fill with gray to avoid crash
-                // and explain the limitation.
-                return Err("Raw sensor data requires debayering (not yet implemented)".to_string());
-            }
-            Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
-        }
-        _ => Err("Unsupported raw data format (non-integer)".to_string()),
-    }
+    Ok(DecodedImage {
+        rgba:   thumbnail.rgba,
+        width:  thumbnail.width,
+        height: thumbnail.height,
+    })
 }
 
 
