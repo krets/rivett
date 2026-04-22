@@ -246,33 +246,32 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
-    let raw = rawloader::decode_file(path)
-        .map_err(|e| format!("rawloader decode failed: {e:?}"))?;
+    let processor = libraw::Processor::new();
+    let decoded = processor.decode(path)
+        .map_err(|e| format!("LibRaw decode failed: {e:?}"))?;
     
-    let width  = raw.width;
-    let height = raw.height;
+    // Use the default post-processing for a previewable RGB image
+    let processed = decoded.process()
+        .map_err(|e| format!("LibRaw process failed: {e:?}"))?;
     
-    // rawloader gives us 16-bit data usually. We need to convert it to 8-bit RGBA.
-    // For a simple preview, we'll just take the top 8 bits of each channel.
-    // NOTE: rawloader output format can vary (Bayer vs RGB), but let's assume 
-    // it handles common cases into a linear buffer we can work with.
+    let width  = processed.width();
+    let height = processed.height();
+    let data   = processed.as_ref(); // This is RGB (8-bit per channel usually)
     
-    match &raw.data {
-        rawloader::RawImageData::Integer(data) => {
-            let mut rgba = Vec::with_capacity(width * height * 4);
-            // This is a very simplistic "preview" conversion.
-            // In a real raw viewer we'd apply white balance and gamma.
-            // For now, let's just make it visible.
-            for chunk in data.chunks_exact(3) {
-                rgba.push((chunk[0] >> 8) as u8);
-                rgba.push((chunk[1] >> 8) as u8);
-                rgba.push((chunk[2] >> 8) as u8);
-                rgba.push(255);
-            }
-            Ok(DecodedImage { rgba, width: width as u32, height: height as u32 })
-        }
-        _ => Err("Unsupported raw data format (non-integer)".to_string()),
+    // Convert RGB to RGBA
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for chunk in data.chunks_exact(3) {
+        rgba.push(chunk[0]);
+        rgba.push(chunk[1]);
+        rgba.push(chunk[2]);
+        rgba.push(255);
     }
+    
+    Ok(DecodedImage {
+        rgba,
+        width: width as u32,
+        height: height as u32,
+    })
 }
 
 
