@@ -12,9 +12,6 @@ use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
 
 #[cfg(windows)]
-extern crate windows_core;
-
-#[cfg(windows)]
 mod win_drag {
     pub use windows::core::HRESULT;
     pub use windows::Win32::Foundation::*;
@@ -22,7 +19,6 @@ mod win_drag {
     pub use windows::Win32::System::Memory::*;
     pub use windows::Win32::System::Ole::*;
     pub use windows::Win32::UI::Shell::*;
-    // This is where MODIFIERKEYS_FLAGS lives in 0.58
     pub use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 
     // Mouse button constants for drag and drop state
@@ -973,8 +969,8 @@ impl RivettApp {
                     Err(_) => return,
                 };
                 
-                let data_object: IDataObject = FileDataObject { hdrop }.into();
-                let drop_source: IDropSource = FileDropSource.into();
+                let data_object: windows::Win32::System::Com::IDataObject = FileDataObject { hdrop }.into();
+                let drop_source: windows::Win32::System::Ole::IDropSource = FileDropSource.into();
                 
                 let mut effect = DROPEFFECT_NONE;
                 let _ = DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY | DROPEFFECT_MOVE, &mut effect);
@@ -1063,11 +1059,11 @@ struct FileDropSource;
 
 #[cfg(windows)]
 impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
-    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: u32) -> win_drag::HRESULT {
+    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
         if fescapepressed.as_bool() {
             return win_drag::DRAGDROP_S_CANCEL;
         }
-        if (grfkeystates & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
+        if (grfkeystates.0 & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
             return win_drag::DRAGDROP_S_DROP;
         }
         win_drag::S_OK
