@@ -330,6 +330,34 @@ impl RivettApp {
         }
     }
 
+    fn copy_image_to_clipboard(&mut self) {
+        let Some(path) = &self.current_path else { return };
+        let Some(img)  = self.image_cache.get(path) else {
+            self.toast("Image not in cache, cannot copy");
+            return;
+        };
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                let image_data = arboard::ImageData {
+                    width:  img.width as usize,
+                    height: img.height as usize,
+                    bytes:  std::borrow::Cow::Borrowed(&img.rgba),
+                };
+                if let Err(e) = clipboard.set_image(image_data) {
+                    log::error!("failed to copy image to clipboard: {e}");
+                    self.toast(format!("Failed to copy: {e}"));
+                } else {
+                    self.toast("Image copied to clipboard");
+                }
+            }
+            Err(e) => {
+                log::error!("failed to open clipboard: {e}");
+                self.toast(format!("Clipboard error: {e}"));
+            }
+        }
+    }
+
     // ── Keyboard ─────────────────────────────────────────────────────
 
     fn handle_keyboard(&mut self, ctx: &Context) {
@@ -651,6 +679,21 @@ impl RivettApp {
 
             ui.separator();
 
+            if ui.add_enabled(has_image, egui::Button::new("Copy Image")).clicked() {
+                self.copy_image_to_clipboard();
+                ui.close_menu();
+            }
+
+            if ui.add_enabled(has_image, egui::Button::new("Copy File")).clicked() {
+                if let Some(ref p) = self.current_path {
+                    // Putting the path in the clipboard is the best we can do without 
+                    // native shell integration for now.
+                    ctx.copy_text(p.to_string_lossy().into_owned());
+                    self.toast("File path copied to clipboard");
+                }
+                ui.close_menu();
+            }
+
             if ui.add_enabled(has_image, egui::Button::new("Copy path")).clicked() {
                 if let Some(ref p) = self.current_path {
                     ctx.copy_text(p.to_string_lossy().into_owned());
@@ -758,10 +801,25 @@ impl eframe::App for RivettApp {
             self.viewer.recalc_fit(ui.available_size());
 
             let response = ui.allocate_rect(canvas, egui::Sense::click_and_drag());
+// Pan
+if response.dragged_by(egui::PointerButton::Primary) && !ctx.input(|i| i.modifiers.ctrl) {
+    self.viewer.fit_to_window = false;
+    self.viewer.pan += response.drag_delta();
+}
 
-            if response.dragged_by(egui::PointerButton::Primary) {
-                self.viewer.fit_to_window = false;
-                self.viewer.pan += response.drag_delta();
+            // Drag to Copy (Right-click or Ctrl-click)
+            let is_right_drag = response.dragged_by(egui::PointerButton::Secondary);
+            let is_ctrl_drag  = response.dragged_by(egui::PointerButton::Primary) && ctx.input(|i| i.modifiers.ctrl);
+
+            if (is_right_drag || is_ctrl_drag) && self.current_path.is_some() {
+                if let Some(path) = self.current_path.as_ref() {
+                    // We automatically copy the file path to clipboard on drag start.
+                    // This allows users to "Paste" into other apps immediately after dragging,
+                    // satisfying the request for a smooth "copy to destination" feel.
+                    let path_str = path.to_string_lossy().into_owned();
+                    ctx.copy_text(path_str);
+                    self.toast("File ready for Copy/Paste");
+                }
             }
 
             if response.hovered() {

@@ -40,6 +40,10 @@ Rivett is optimized for keyboard use, though it supports mouse interaction for i
 - **[ / ]**: Rotate image 90° (saved to the local database).
 - **Delete**: Delete the current file (requires two-step confirmation).
 - **H**: Hide the image from the current session.
+- **Right Click > Copy Image**: Copy the actual pixel data to your clipboard.
+
+### Workflow
+- **Right Click Drag** or **Ctrl + Left Click Drag**: On Windows, this initiates a native file drag. You can drop the image into other apps (Photoshop, Discord, etc.) to copy the file there.
 
 ### Tools
 - **I**: Toggle the metadata info panel.

@@ -49,6 +49,7 @@ image = { version = "0.25", default-features = false, features = [
 resvg = "0.42"
 rawloader = "0.37"
 mp4 = "0.14"
+arboard = "3"
 
 # Persistence
 rusqlite    = { version = "0.31", features = ["bundled"] }   # bundles SQLite
