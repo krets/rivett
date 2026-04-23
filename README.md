@@ -37,7 +37,6 @@ Rivett is optimized for keyboard use, though it supports mouse interaction for i
 ### Vetting
 - **1 - 5**: Set image rating.
 - **0**: Clear rating.
-- **B**: Toggle bookmark.
 - **[ / ]**: Rotate image 90° (saved to the local database).
 - **Delete**: Delete the current file (requires two-step confirmation).
 - **H**: Hide the image from the current session.

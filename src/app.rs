@@ -244,24 +244,6 @@ impl RivettApp {
         }
     }
 
-    fn toggle_bookmark(&mut self) {
-        if let Some(path) = &self.current_path {
-            if let (Some(db), Some(dir_str), Some(fname)) = (
-                &self.db,
-                path.parent().map(|p| p.to_string_lossy().into_owned()),
-                path.file_name().and_then(|n| n.to_str()).map(str::to_string),
-            ) {
-                if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
-                    let current = db.get_image(dir.id, &fname)
-                        .ok().flatten().map(|r| r.bookmarked).unwrap_or(false);
-                    let _ = db.set_bookmark(dir.id, &fname, !current);
-                    self.toast(if current { "Bookmark removed" } else { "Bookmarked ★" });
-                    self.refresh_record();
-                }
-            }
-        }
-    }
-
     fn rotate_current(&mut self, cw: bool, ctx: &Context) {
         let Some(path) = self.current_path.clone() else { return };
         let Some(db)   = &self.db              else { return };
@@ -399,7 +381,7 @@ impl RivettApp {
         }
 
         // Bookmark
-        if input.key_pressed(Key::B) { self.toggle_bookmark(); }
+        // Removed as requested
 
         // Hide
         if input.key_pressed(Key::H) { self.hide_current(ctx); }
@@ -507,20 +489,18 @@ impl RivettApp {
                             }
                         }
 
-                        // ── Rating & bookmark ─────────────────────────────
+                        // ── Rating ───────────────────────────────────────
                         ui.separator();
-                        ui.heading("Rating & Bookmark");
+                        ui.heading("Rating");
 
-                        let (rating, bookmarked) = self.current_record.as_ref()
-                            .map(|r| (r.rating, r.bookmarked))
-                            .unwrap_or((None, false));
+                        let rating = self.current_record.as_ref()
+                            .and_then(|r| r.rating);
 
                         let stars = match rating {
                             None    => "— (unrated)".to_string(),
                             Some(r) => format!("{} ({})", "★".repeat(r as usize), r),
                         };
                         ui.label(format!("Rating: {stars}"));
-                        ui.label(if bookmarked { "Bookmarked: Yes" } else { "Bookmarked: No" });
 
                         if let Some(ref rec) = self.current_record {
                             if let Some(ref note) = rec.note {
@@ -619,11 +599,6 @@ impl RivettApp {
             }
 
             ui.separator();
-
-            if ui.add_enabled(has_image, egui::Button::new("Bookmark").shortcut_text("B")).clicked() {
-                self.toggle_bookmark();
-                ui.close_menu();
-            }
 
             ui.menu_button("Set rating", |ui| {
                 for (label, r, key) in [
