@@ -76,10 +76,16 @@ tempfile = "3"
 winres = "0.1"
 vcpkg  = "0.2"
 
+# Faster build
+[profile.release-local]
+inherits      = "release"
+lto           = false
+codegen-units = 16
+strip         = false
+
 # ---------------------------------------------------------------------------
 # Release profile — small, fast binary
 # ---------------------------------------------------------------------------
-
 [profile.release]
 opt-level     = 3
 lto           = true

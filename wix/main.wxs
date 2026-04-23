@@ -15,41 +15,6 @@
   limitations under the License.
 -->
 
-<!--
-  The "cargo wix" subcommand provides a variety of predefined variables available
-  for customization of this template. The values for each variable are set at
-  installer creation time. The following variables are available:
-
-  TargetTriple      = The rustc target triple name.
-  TargetEnv         = The rustc target environment. This is typically either
-                      "msvc" or "gnu" depending on the toolchain downloaded and
-                      installed.
-  TargetVendor      = The rustc target vendor. This is typically "pc", but Rust
-                      does support other vendors, like "uwp".
-  CargoTargetBinDir = The complete path to the directory containing the
-                      binaries (exes) to include. The default would be
-                      "target\release\". If an explicit rustc target triple is
-                      used, i.e. cross-compiling, then the default path would
-                      be "target\<CARGO_TARGET>\<CARGO_PROFILE>",
-                      where "<CARGO_TARGET>" is replaced with the "CargoTarget"
-                      variable value and "<CARGO_PROFILE>" is replaced with the
-                      value from the "CargoProfile" variable. This can also
-                      be overridden manually with the "target-bin-dir" flag.
-  CargoTargetDir    = The path to the directory for the build artifacts, i.e.
-                      "target".
-  CargoProfile      = The cargo profile used to build the binaries
-                      (usually "debug" or "release").
-  Version           = The version for the installer. The default is the
-                      "Major.Minor.Fix" semantic versioning number of the Rust
-                      package.
--->
-
-<!--
-  Please do not remove these pre-processor If-Else blocks. These are used with
-  the `cargo wix` subcommand to automatically determine the installation
-  destination for 32-bit versus 64-bit installers. Removal of these lines will
-  cause installation errors.
--->
 <?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
     <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
 <?else ?>
@@ -60,7 +25,7 @@
 
     <Product
         Id='*'
-        Name='rivett'
+        Name='Rivett'
         UpgradeCode='4FC25C8F-175E-4005-8AD9-E09C31EB26C3'
         Manufacturer='Rivett Developers'
         Language='1033'
@@ -69,7 +34,7 @@
 
         <Package Id='*'
             Keywords='Installer'
-            Description='Rust Image Vetting Tool — fast, keyboard-driven image viewer'
+            Description='Rivett — High-performance image vetting tool'
             Manufacturer='Rivett Developers'
             InstallerVersion='450'
             Languages='1033'
@@ -83,45 +48,37 @@
             DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
-        <Property Id='DiskPrompt' Value='rivett Installation'/>
+        <Property Id='DiskPrompt' Value='Rivett Installation'/>
+
+        <Icon Id='ProductICO' SourceFile='wix\Product.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO' />
+        <Property Id='ARPHELPLINK' Value='https://github.com/krets/rivett'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
-                <Directory Id='APPLICATIONFOLDER' Name='rivett'>
-                    <!--
-                      Disabling the license sidecar file in the installer is a two step process:
-
-                      1. Comment out or remove the `Component` tag along with its contents.
-                      2. Comment out or remove the `ComponentRef` tag with the "License" Id
-                         attribute value further down in this file.
-                    -->
+                <Directory Id='APPLICATIONFOLDER' Name='Rivett'>
+                    
                     <Component Id='License' Guid='*'>
-                        <File Id='LicenseFile'
-                            DiskId='1'
-                            Source='wix\License.rtf'
-                            KeyPath='yes'/>
+                        <File Id='LicenseFile' DiskId='1' Source='wix\License.rtf' KeyPath='yes'/>
                     </Component>
                     
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='Path' Guid='57C98A4B-B1F6-4F0F-B7F8-A18CA06FACA9' KeyPath='yes'>
-                            <Environment
-                                Id='PATH'
-                                Name='PATH'
-                                Value='[Bin]'
-                                Permanent='no'
-                                Part='last'
-                                Action='set'
-                                System='yes'/>
+                            <Environment Id='PATH' Name='PATH' Value='[Bin]' Permanent='no' Part='last' Action='set' System='yes'/>
                         </Component>
                         <Component Id='binary0' Guid='*'>
-                            <File
-                                Id='exe0'
-                                Name='rivett.exe'
-                                DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\rivett.exe'
-                                KeyPath='yes'/>
+                            <File Id='exe0' Name='rivett.exe' DiskId='1' Source='$(var.CargoTargetBinDir)\rivett.exe' KeyPath='yes'/>
                         </Component>
-                        <Component Id='RegistryEntries' Guid='*'>
+
+                        <!-- Context Menu (Optional Feature) -->
+                        <Component Id='RegistryShell' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Type='string' Value='Open with Rivett' KeyPath='yes' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Name='Icon' Type='string' Value='[#exe0]' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
+                        </Component>
+
+                        <!-- File Associations (Optional Feature) -->
+                        <Component Id='RegistryAssoc' Guid='*'>
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Type='string' Value='Rivett Image' KeyPath='yes' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Name='PerceivedType' Type='string' Value='image' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image\shell\open\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
@@ -129,13 +86,10 @@
                             <RegistryValue Root='HKMU' Key='Software\Classes\.jpg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\.jpeg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\.webp\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.bmp\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.tif\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.tiff\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.gif\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Type='string' Value='Open with Rivett' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Name='Icon' Type='string' Value='[#exe0]' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.exr\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.svg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.cr3\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.arw\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
                         </Component>
                     </Directory>
                 </Directory>
@@ -144,27 +98,37 @@
 
         <Feature
             Id='Binaries'
-            Title='Application'
-            Description='Installs all binaries and the license.'
+            Title='Rivett Application'
+            Description='The core Rivett executable and license.'
             Level='1'
             ConfigurableDirectory='APPLICATIONFOLDER'
             AllowAdvertise='no'
             Display='expand'
             Absent='disallow'>
-            <!--
-              Comment out or remove the following `ComponentRef` tag to remove
-              the license sidecar file from the installer.
-            -->
             <ComponentRef Id='License'/>
-            
             <ComponentRef Id='binary0'/>
-            <ComponentRef Id='RegistryEntries'/>
+
+            <Feature
+                Id='Associations'
+                Title='File Associations'
+                Description='Register Rivett as an option for common image formats (PNG, JPG, RAW, etc.).'
+                Level='1'>
+                <ComponentRef Id='RegistryAssoc'/>
+            </Feature>
+
+            <Feature
+                Id='ContextMenu'
+                Title='Context Menu'
+                Description='Add "Open with Rivett" to the right-click menu in File Explorer.'
+                Level='1'>
+                <ComponentRef Id='RegistryShell'/>
+            </Feature>
 
             <Feature
                 Id='Environment'
-                Title='PATH Environment Variable'
-                Description='Add the install location of the [ProductName] executable to the PATH system environment variable. This allows the [ProductName] executable to be called from any location.'
-                Level='1'
+                Title='Add to PATH'
+                Description='Add Rivett to your system PATH for command-line use.'
+                Level='2'
                 Absent='allow'>
                 <ComponentRef Id='Path'/>
             </Feature>
@@ -172,69 +136,14 @@
 
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
-        
-        <!--
-          Uncomment the following `Icon` and `Property` tags to change the product icon.
-
-          The product icon is the graphic that appears in the Add/Remove
-          Programs control panel for the application.
-        -->
-        <!--<Icon Id='ProductICO' SourceFile='wix\Product.ico'/>-->
-        <!--<Property Id='ARPPRODUCTICON' Value='ProductICO' />-->
-
-        
-        <!--
-          Adding a URL to Add/Remove Programs control panel listing for the
-          application is a two step process:
-
-          1. Uncomment the following `Property` tag with the "ARPHELPLINK" Id
-             attribute value.
-          2. Change the value for `Value` attribute of the following
-             `Property` tag to a valid URL.
-        -->
-        <!--<Property Id='ARPHELPLINK' Value='ChangeMe'/>-->
-
         <UI>
             <UIRef Id='WixUI_FeatureTree'/>
-            <!--
-              Disabling the EULA dialog in the installer is a two step process:
-
-                 1. Uncomment the following two `Publish` tags
-                 2. Comment out or remove the `<WiXVariable Id='WixUILicenseRtf'...` tag further down
-
-            -->
             <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
             <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
-            
         </UI>
 
-        <!--
-          Disabling the EULA dialog in the installer requires commenting out
-          or removing the following `WixVariable` tag
-        -->
-        <!--<WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>-->
-        
-        
-        <!--
-          Uncomment the next `WixVariable` tag to customize the installer's
-          Graphical User Interface (GUI) and add a custom banner image across
-          the top of each screen. See the WiX Toolset documentation for details
-          about customization.
-
-          The banner BMP dimensions are 493 x 58 pixels.
-        -->
-        <!--<WixVariable Id='WixUIBannerBmp' Value='wix\Banner.bmp'/>-->
-
-        
-        <!--
-          Uncomment the next `WixVariable` tag to customize the installer's
-          Graphical User Interface (GUI) and add a custom image to the first
-          dialog, or screen. See the WiX Toolset documentation for details about
-          customization.
-
-          The dialog BMP dimensions are 493 x 312 pixels.
-        -->
-        <!--<WixVariable Id='WixUIDialogBmp' Value='wix\Dialog.bmp'/>-->
+        <WixVariable Id='WixUIBannerBmp' Value='wix\Banner.bmp'/>
+        <WixVariable Id='WixUIDialogBmp' Value='wix\Dialog.bmp'/>
 
     </Product>
 
