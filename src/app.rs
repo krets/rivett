@@ -878,11 +878,15 @@ impl eframe::App for RivettApp {
                 );
             }
 
-            if self.current_record.as_ref().map(|r| r.bookmarked || r.rating.is_some()).unwrap_or(false) {
-                painter.circle_filled(
-                    egui::pos2(canvas.max.x - 14.0, canvas.min.y + 14.0),
-                    6.0, egui::Color32::from_rgb(255, 180, 0),
+            if self.session.has_pending_changes() {
+                let dot_pos = egui::pos2(canvas.max.x - 14.0, canvas.min.y + 14.0);
+                let response = ui.interact(
+                    egui::Rect::from_center_size(dot_pos, egui::vec2(12.0, 12.0)),
+                    egui::Id::new("modified_badge"),
+                    egui::Sense::hover(),
                 );
+                response.on_hover_text("Unsaved session changes (e.g. pending crops)");
+                painter.circle_filled(dot_pos, 6.0, egui::Color32::from_rgb(255, 180, 0));
             }
 
             if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
