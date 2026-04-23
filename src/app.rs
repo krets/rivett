@@ -19,6 +19,7 @@ mod win_drag {
     pub use windows::Win32::System::Memory::*;
     pub use windows::Win32::System::Ole::*;
     pub use windows::Win32::UI::Shell::*;
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::MODIFIERKEYS_FLAGS;
 
     // Mouse button constants for drag and drop state
     pub const MK_LBUTTON: u32 = 0x0001;
@@ -979,13 +980,16 @@ impl RivettApp {
 }
 
 #[cfg(windows)]
-#[windows::core::implement(windows::Win32::System::Com::IDataObject)]
+#[windows_core::implement(windows::Win32::System::Com::IDataObject)]
 struct FileDataObject {
     hdrop: win_drag::HGLOBAL,
 }
 
 #[cfg(windows)]
-impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
+use windows::Win32::System::Com::IDataObject_Impl;
+
+#[cfg(windows)]
+impl IDataObject_Impl for FileDataObject {
     fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> windows::core::Result<win_drag::STGMEDIUM> {
         unsafe {
             let formatetc = *pformatetc;
@@ -1022,7 +1026,7 @@ impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
         }
     }
 
-    fn SetData(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *const win_drag::STGMEDIUM, _frelease: win_drag::BOOL) -> windows::core::Result<()> {
+    fn SetData(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *const win_drag::STGMEDIUM, _frelease: windows::Win32::Foundation::BOOL) -> windows::core::Result<()> {
         Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
     }
 
@@ -1053,16 +1057,19 @@ impl Drop for FileDataObject {
 }
 
 #[cfg(windows)]
-#[windows::core::implement(windows::Win32::System::Ole::IDropSource)]
+#[windows_core::implement(windows::Win32::System::Ole::IDropSource)]
 struct FileDropSource;
 
 #[cfg(windows)]
-impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
-    fn QueryContinueDrag(&self, fescapepressed: win_drag::BOOL, grfkeystates: u32) -> win_drag::HRESULT {
+use windows::Win32::System::Ole::IDropSource_Impl;
+
+#[cfg(windows)]
+impl IDropSource_Impl for FileDropSource {
+    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
         if fescapepressed.as_bool() {
             return win_drag::DRAGDROP_S_CANCEL;
         }
-        if (grfkeystates & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
+        if (grfkeystates.0 & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
             return win_drag::DRAGDROP_S_DROP;
         }
         win_drag::S_OK
@@ -1113,7 +1120,7 @@ fn create_hdrop(path: &std::path::Path) -> windows::core::Result<win_drag::HGLOB
         
         let dropfiles = ptr as *mut win_drag::DROPFILES;
         (*dropfiles).pFiles = std::mem::size_of::<win_drag::DROPFILES>() as u32;
-        (*dropfiles).fWide = win_drag::BOOL(1); 
+        (*dropfiles).fWide = windows::Win32::Foundation::BOOL(1); 
 
         let path_ptr = (ptr as *mut u8).add(std::mem::size_of::<win_drag::DROPFILES>()) as *mut u16;
         std::ptr::copy_nonoverlapping(path_u16.as_ptr(), path_ptr, path_u16.len());
