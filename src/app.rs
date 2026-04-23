@@ -11,6 +11,22 @@ use crate::session::{SessionState, RatingFilter, RatingFilterOp};
 use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
 
+#[cfg(windows)]
+use windows_core as _;
+
+#[cfg(windows)]
+mod win_drag {
+    pub use windows::core::*;
+    pub use windows::Win32::Foundation::*;
+    pub use windows::Win32::System::Com::*;
+    pub use windows::Win32::System::Memory::*;
+    pub use windows::Win32::System::Ole::*;
+    pub use windows::Win32::System::DataExchange::*;
+    pub use windows::Win32::UI::Shell::*;
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    pub use std::os::windows::ffi::OsStrExt;
+}
+
 // ---------------------------------------------------------------------------
 // RivettApp
 // ---------------------------------------------------------------------------
@@ -811,14 +827,17 @@ if response.dragged_by(egui::PointerButton::Primary) && !ctx.input(|i| i.modifie
             let is_right_drag = response.dragged_by(egui::PointerButton::Secondary);
             let is_ctrl_drag  = response.dragged_by(egui::PointerButton::Primary) && ctx.input(|i| i.modifiers.ctrl);
 
-            if (is_right_drag || is_ctrl_drag) && self.current_path.is_some() {
+            if (is_right_drag || is_ctrl_drag) && self.current_path.is_some() && response.drag_started() {
+                #[cfg(windows)]
                 if let Some(path) = self.current_path.as_ref() {
-                    // We automatically copy the file path to clipboard on drag start.
-                    // This allows users to "Paste" into other apps immediately after dragging,
-                    // satisfying the request for a smooth "copy to destination" feel.
+                    self.spawn_native_drag(path.clone());
+                }
+                
+                #[cfg(not(windows))]
+                if let Some(path) = self.current_path.as_ref() {
                     let path_str = path.to_string_lossy().into_owned();
                     ctx.copy_text(path_str);
-                    self.toast("File ready for Copy/Paste");
+                    self.toast("File path copied to clipboard");
                 }
             }
 
@@ -975,5 +994,180 @@ impl DeleteConfirm {
     }
     fn alive(&self) -> bool {
         self.start.elapsed() < Duration::from_secs(4)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native Windows Drag and Drop Implementation
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+impl RivettApp {
+    fn spawn_native_drag(&self, path: std::path::PathBuf) {
+        use win_drag::*;
+        
+        std::thread::spawn(move || {
+            unsafe {
+                let _ = OleInitialize(None);
+                
+                let hdrop = match create_hdrop(&path) {
+                    Ok(h) => h,
+                    Err(_) => return,
+                };
+                
+                let data_object: IDataObject = FileDataObject { hdrop }.into();
+                let drop_source: IDropSource = FileDropSource.into();
+                
+                let mut effect = DROPEFFECT_NONE;
+                let _ = DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY | DROPEFFECT_MOVE, &mut effect);
+                // After DoDragDrop, the data_object will be dropped and hdrop will be freed.
+            }
+        });
+    }
+}
+
+#[cfg(windows)]
+#[windows::core::implement(windows::Win32::System::Com::IDataObject)]
+struct FileDataObject {
+    hdrop: win_drag::HGLOBAL,
+}
+
+#[cfg(windows)]
+impl win_drag::IDataObject_Impl for FileDataObject {
+    fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> win_drag::Result<win_drag::STGMEDIUM> {
+        unsafe {
+            let formatetc = *pformatetc;
+            if formatetc.cfFormat == win_drag::CF_HDROP.0 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
+                let mut medium = win_drag::STGMEDIUM::default();
+                medium.tymed = win_drag::TYMED_HGLOBAL.0 as u32;
+                medium.u.hGlobal = duplicate_hglobal(self.hdrop)?;
+                return Ok(medium);
+            }
+            Err(win_drag::DV_E_FORMATETC.into())
+        }
+    }
+
+    fn GetDataHere(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *mut win_drag::STGMEDIUM) -> win_drag::Result<()> {
+        Err(win_drag::E_NOTIMPL.into())
+    }
+
+    fn QueryGetData(&self, pformatetc: *const win_drag::FORMATETC) -> win_drag::HRESULT {
+        unsafe {
+            let formatetc = *pformatetc;
+            if formatetc.cfFormat == win_drag::CF_HDROP.0 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
+                return win_drag::S_OK;
+            }
+            win_drag::DV_E_FORMATETC
+        }
+    }
+
+    fn GetCanonicalFormatEtc(&self, _pformatectin: *const win_drag::FORMATETC, pformatetcout: *mut win_drag::FORMATETC) -> win_drag::HRESULT {
+        unsafe {
+            if !pformatetcout.is_null() {
+                (*pformatetcout).ptd = std::ptr::null_mut();
+            }
+            win_drag::E_NOTIMPL
+        }
+    }
+
+    fn SetData(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *const win_drag::STGMEDIUM, _frelease: win_drag::BOOL) -> win_drag::Result<()> {
+        Err(win_drag::E_NOTIMPL.into())
+    }
+
+    fn EnumFormatEtc(&self, _dwdirection: u32) -> win_drag::Result<win_drag::IEnumFORMATETC> {
+        Err(win_drag::E_NOTIMPL.into())
+    }
+
+    fn DAdvise(&self, _pformatetc: *const win_drag::FORMATETC, _advf: u32, _padvsink: Option<&win_drag::IAdviseSink>) -> win_drag::Result<u32> {
+        Err(win_drag::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+
+    fn DUnadvise(&self, _dwconnection: u32) -> win_drag::Result<()> {
+        Err(win_drag::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+
+    fn EnumDAdvise(&self) -> win_drag::Result<win_drag::IEnumSTATDATA> {
+        Err(win_drag::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for FileDataObject {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = win_drag::GlobalFree(self.hdrop);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[windows::core::implement(windows::Win32::System::Ole::IDropSource)]
+struct FileDropSource;
+
+#[cfg(windows)]
+impl win_drag::IDropSource_Impl for FileDropSource {
+    fn QueryContinueDrag(&self, fescapepressed: win_drag::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
+        if fescapepressed.as_bool() {
+            return win_drag::DRAGDROP_S_CANCEL;
+        }
+        // Both Left and Right buttons might be used for dragging in this app.
+        if (grfkeystates.0 & (win_drag::MK_LBUTTON.0 | win_drag::MK_RBUTTON.0)) == 0 {
+            return win_drag::DRAGDROP_S_DROP;
+        }
+        win_drag::S_OK
+    }
+
+    fn GiveFeedback(&self, _dweffect: win_drag::DROPEFFECT) -> win_drag::HRESULT {
+        win_drag::DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+#[cfg(windows)]
+fn duplicate_hglobal(hglobal: win_drag::HGLOBAL) -> win_drag::Result<win_drag::HGLOBAL> {
+    unsafe {
+        let size = win_drag::GlobalSize(hglobal);
+        let src = win_drag::GlobalLock(hglobal);
+        if src.is_null() { return Err(win_drag::E_FAIL.into()); }
+        
+        let dest_hglobal = win_drag::GlobalAlloc(win_drag::GMEM_MOVEABLE, size)?;
+        let dest = win_drag::GlobalLock(dest_hglobal);
+        if dest.is_null() {
+            let _ = win_drag::GlobalFree(dest_hglobal);
+            let _ = win_drag::GlobalUnlock(hglobal);
+            return Err(win_drag::E_FAIL.into());
+        }
+        
+        std::ptr::copy_nonoverlapping(src, dest, size);
+        let _ = win_drag::GlobalUnlock(hglobal);
+        let _ = win_drag::GlobalUnlock(dest_hglobal);
+        Ok(dest_hglobal)
+    }
+}
+
+#[cfg(windows)]
+fn create_hdrop(path: &std::path::Path) -> win_drag::Result<win_drag::HGLOBAL> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut path_u16: Vec<u16> = path.as_os_str().encode_wide().collect();
+    path_u16.push(0);
+    path_u16.push(0); // double null terminator
+
+    let size = std::mem::size_of::<win_drag::DROPFILES>() + path_u16.len() * 2;
+    unsafe {
+        let hglobal = win_drag::GlobalAlloc(win_drag::GMEM_MOVEABLE | win_drag::GMEM_ZEROINIT, size)?;
+        let ptr = win_drag::GlobalLock(hglobal);
+        if ptr.is_null() {
+            let _ = win_drag::GlobalFree(hglobal);
+            return Err(win_drag::E_FAIL.into());
+        }
+        
+        let dropfiles = ptr as *mut win_drag::DROPFILES;
+        (*dropfiles).pFiles = std::mem::size_of::<win_drag::DROPFILES>() as u32;
+        (*dropfiles).fWide = win_drag::BOOL(1); // Unicode
+
+        let path_ptr = (ptr as *mut u8).add(std::mem::size_of::<win_drag::DROPFILES>()) as *mut u16;
+        std::ptr::copy_nonoverlapping(path_u16.as_ptr(), path_ptr, path_u16.len());
+
+        let _ = win_drag::GlobalUnlock(hglobal);
+        Ok(hglobal)
     }
 }
