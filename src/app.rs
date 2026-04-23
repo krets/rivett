@@ -22,6 +22,10 @@ mod win_drag {
     pub use windows::Win32::System::Ole::*;
     pub use windows::Win32::UI::Shell::*;
 
+    // In windows 0.58, implementation traits are in an 'impl' submodule
+    pub use windows::Win32::System::Com::r#impl::IDataObject_Impl;
+    pub use windows::Win32::System::Ole::r#impl::IDropSource_Impl;
+
     // Mouse button constants for drag and drop state
     pub const MK_LBUTTON: u32 = 0x0001;
     pub const MK_RBUTTON: u32 = 0x0002;
