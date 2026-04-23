@@ -62,9 +62,6 @@ impl RivettApp {
             settings,
         };
 
-        // If an image was passed as an arg (or drag-dropped onto the EXE), open it.
-        // We defer scanning the directory to the background where possible, 
-        // but here we just do it immediately to show the first image.
         if let Some(path) = initial_image {
             app.open_image(path, &cc.egui_ctx);
         }
@@ -83,7 +80,6 @@ impl RivettApp {
     pub fn open_image(&mut self, path: std::path::PathBuf, ctx: &Context) {
         if !path.exists() { return; }
         
-        // If we are opening a single file, scan its directory.
         if path.is_file() {
             if let Some(dir) = path.parent() {
                 let sort   = self.session_sort_order();
@@ -114,18 +110,15 @@ impl RivettApp {
 
         self.current_path = Some(path.clone());
         
-        // Fetch the DB record (ratings, bookmark, note, rotation).
         self.refresh_record();
 
         let rotation = self.current_record.as_ref()
             .map(|r| crate::session::Rotation::from_u8(r.rotation))
             .unwrap_or_default();
 
-        // 1. Try cache
         if let Some(img) = self.image_cache.get(&path) {
             self.viewer.load_image(ctx, img, rotation, preserve_zoom);
         } else {
-            // 2. Load from disk
             match load_image(&path) {
                 Ok(img) => {
                     self.image_cache.insert(path.clone(), img.clone());
@@ -138,13 +131,12 @@ impl RivettApp {
             }
         }
 
-        // 3. Prefetch neighbors
         if let Some(ref listing) = self.listing {
             // Next
             let mut i = listing.current_index + 1;
             while i < listing.files.len() {
                 let p = &listing.files[i];
-                if !Self::is_path_ignored(p) {
+                if !self.session_is_ignored(p) {
                     self.image_cache.prefetch(p.clone());
                     break;
                 }
@@ -154,7 +146,7 @@ impl RivettApp {
             let mut i = listing.current_index as i32 - 1;
             while i >= 0 {
                 let p = &listing.files[i as usize];
-                if !Self::is_path_ignored(p) {
+                if !self.session_is_ignored(p) {
                     self.image_cache.prefetch(p.clone());
                     break;
                 }
@@ -162,7 +154,6 @@ impl RivettApp {
             }
         }
 
-        // Read PNG/EXIF metadata for the info panel.
         self.metadata = read_metadata(&path);
     }
 
@@ -179,36 +170,29 @@ impl RivettApp {
     // ── Navigation ────────────────────────────────────────────────────────
 
     fn navigate_next(&mut self, ctx: &Context, preserve_zoom: bool) {
-        let moved = if let Some(ref mut listing) = self.listing {
-            let mut moved = false;
-            loop {
-                if !listing.go_next() { break; }
+        let mut moved = false;
+        if let Some(ref mut listing) = self.listing {
+            while listing.go_next() {
                 moved = true;
                 if let Some(p) = listing.current() {
-                    if !Self::is_path_ignored(p) { break; }
+                    // Check ignore without using 'self' directly in the loop
+                    if !self.session.ignored_images.contains(p) { break; }
                 }
             }
-            moved
-        } else {
-            false
-        };
+        }
         if moved { self.load_current(ctx, preserve_zoom); }
     }
 
     fn navigate_prev(&mut self, ctx: &Context, preserve_zoom: bool) {
-        let moved = if let Some(ref mut listing) = self.listing {
-            let mut moved = false;
-            loop {
-                if !listing.go_prev() { break; }
+        let mut moved = false;
+        if let Some(ref mut listing) = self.listing {
+            while listing.go_prev() {
                 moved = true;
                 if let Some(p) = listing.current() {
-                    if !Self::is_path_ignored(p) { break; }
+                    if !self.session.ignored_images.contains(p) { break; }
                 }
             }
-            moved
-        } else {
-            false
-        };
+        }
         if moved { self.load_current(ctx, preserve_zoom); }
     }
 
@@ -216,14 +200,12 @@ impl RivettApp {
 
     fn hide_current(&mut self, ctx: &Context) {
         let Some(path) = self.current_path.clone() else { return };
-        // We'll just track this in memory for the current session for now.
-        // If we want it persistent, we should add a 'hidden' column to the DB.
         self.toast(format!("Hidden: {}", path.file_name()
             .and_then(|n| n.to_str()).unwrap_or("?")));
         self.navigate_next(ctx, false);
     }
 
-    // ── Rating / bookmarks ────────────────────────────────────────────────
+    // ── Rating ────────────────────────────────────────────────────────────
 
     fn set_rating(&mut self, rating: Option<u8>) {
         if let Some(path) = &self.current_path {
@@ -277,12 +259,13 @@ impl RivettApp {
             Ok(()) => {
                 let name = path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("?").to_string();
-                // Remove from listing so we don't see it again.
+                
                 let sort = self.session_sort_order();
-                let db = self.db.as_ref();
+                let db_ref = self.db.as_ref();
                 if let Some(ref mut listing) = self.listing {
-                    let _ = listing.refresh(sort, db);
+                    let _ = listing.refresh(sort, db_ref);
                 }
+                
                 self.toast(format!("Deleted: {name}"));
                 self.current_path   = None;
                 self.current_record = None;
@@ -299,6 +282,7 @@ impl RivettApp {
     // ── Hard refresh ─────────────────────────────────────────────────────
 
     fn hard_refresh(&mut self, ctx: &Context) {
+        self.session.flush();
         if let Some(dir) = self.listing.as_ref().map(|l| l.dir_path.clone()) {
             let sort = self.session_sort_order();
             if let Ok(mut fresh) = DirectoryListing::scan(&dir, sort, None, self.db.as_ref()) {
@@ -314,20 +298,30 @@ impl RivettApp {
     // ── Helpers ──────────────────────────────────────────────────────────
 
     fn session_sort_order(&self) -> crate::settings::SortOrder {
-        // For now, always Name sort. 
         crate::settings::SortOrder::Name
     }
 
-    fn is_path_ignored(_path: &std::path::Path) -> bool {
+    fn session_is_ignored(&self, _path: &std::path::Path) -> bool {
         false
     }
 
     fn window_title(&self) -> String {
-        if let Some(ref p) = self.current_path {
+        let mut title = if let Some(ref p) = self.current_path {
             format!("{} — Rivett", p.display())
         } else {
             "Rivett".to_string()
+        };
+
+        if let Some(filter) = self.session.rating_filter {
+            let scope = if self.listing.as_ref().map(|l| l.dir_path.as_os_str().is_empty()).unwrap_or(false) {
+                "Library"
+            } else {
+                "Folder"
+            };
+            title = format!("{title} ({scope}: ★ {}+)", filter.value);
         }
+
+        title
     }
 
     fn reveal_in_file_manager(&self) {
@@ -341,17 +335,13 @@ impl RivettApp {
     fn handle_keyboard(&mut self, ctx: &Context) {
         let input = ctx.input(|i| i.clone());
 
-        // Cancelations
         if input.key_pressed(Key::Escape) {
             if self.delete_confirm.is_some() {
                 self.delete_confirm = None;
                 self.toast("Delete cancelled");
-            } else {
-                // Exit app? No, usually Escape just clears overlays in image viewers.
             }
         }
 
-        // Navigation
         let shift = input.modifiers.shift;
         let preserve_zoom = shift;
 
@@ -362,10 +352,8 @@ impl RivettApp {
             self.navigate_prev(ctx, preserve_zoom);
         }
 
-        // Info panel
         if input.key_pressed(Key::I) { self.show_info_panel = !self.show_info_panel; }
 
-        // Ratings (1-5, 0 to clear)
         for r in 0..=5 {
             let key = match r {
                 0 => Key::Num0,
@@ -380,13 +368,8 @@ impl RivettApp {
             if input.key_pressed(key) { self.set_rating(rating); }
         }
 
-        // Bookmark
-        // Removed as requested
-
-        // Hide
         if input.key_pressed(Key::H) { self.hide_current(ctx); }
 
-        // Rotation
         if input.key_pressed(Key::OpenBracket) {
             self.rotate_current(false, ctx);
         }
@@ -394,7 +377,6 @@ impl RivettApp {
             self.rotate_current(true, ctx);
         }
 
-        // Zoom via keyboard
         let ctrl = input.modifiers.ctrl;
         if ctrl && input.key_pressed(Key::Num0) {
             self.viewer.zoom_actual_size();
@@ -402,7 +384,6 @@ impl RivettApp {
             self.viewer.toggle_fit(ctx.screen_rect().size());
         }
 
-        // Delete
         if input.key_pressed(Key::Delete) {
             if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
                 self.execute_delete(ctx);
@@ -411,7 +392,6 @@ impl RivettApp {
             }
         }
 
-        // Hard refresh (Ctrl+Shift+R)
         if ctrl && input.modifiers.shift && input.key_pressed(Key::R) {
             self.hard_refresh(ctx);
         }
@@ -425,7 +405,6 @@ impl RivettApp {
             .min_width(280.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    // ── File info ─────────────────────────────────────────
                     ui.heading("Image Info");
                     ui.separator();
 
@@ -454,7 +433,6 @@ impl RivettApp {
                             ui.label(listing.position_label());
                         }
 
-                        // ── Viewing adjustment ────────────────────────────
                         ui.separator();
                         ui.heading("Viewing Adjustment");
                         let mut g = self.viewer.gamma;
@@ -468,7 +446,6 @@ impl RivettApp {
                             }
                         });
 
-                        // ── Histogram ─────────────────────────────────────
                         if let Some(img) = self.image_cache.get(&path) {
                             ui.separator();
                             ui.heading("Histogram (Luminance)");
@@ -489,7 +466,6 @@ impl RivettApp {
                             }
                         }
 
-                        // ── Rating ───────────────────────────────────────
                         ui.separator();
                         ui.heading("Rating");
 
@@ -508,7 +484,6 @@ impl RivettApp {
                             }
                         }
 
-                        // ── Image metadata ───────────────────────────────
                         if !self.metadata.is_empty() {
                             ui.separator();
                             ui.heading("Metadata");
@@ -581,19 +556,11 @@ impl RivettApp {
         let has_image = self.current_path.is_some();
 
         response.context_menu(|ui| {
-            let next_shortcut = "Shift+Right";
-            let prev_shortcut = "Shift+Left";
-            let zoom_hint     = "(Shift to preserve zoom)";
-
-            if ui.add_enabled(has_image, egui::Button::new(format!("Next Image {zoom_hint}"))
-                .shortcut_text(next_shortcut)).clicked() 
-            {
+            if ui.add_enabled(has_image, egui::Button::new("Next Image")).clicked() {
                 self.navigate_next(ctx, true);
                 ui.close_menu();
             }
-            if ui.add_enabled(has_image, egui::Button::new(format!("Previous Image {zoom_hint}"))
-                .shortcut_text(prev_shortcut)).clicked() 
-            {
+            if ui.add_enabled(has_image, egui::Button::new("Previous Image")).clicked() {
                 self.navigate_prev(ctx, true);
                 ui.close_menu();
             }
@@ -617,7 +584,7 @@ impl RivettApp {
             });
 
             ui.menu_button("Filter", |ui| {
-                ui.menu_button("Local Filter (current folder)", |ui| {
+                ui.menu_button("Current folder", |ui| {
                     for r in 1..=5 {
                         let filter = RatingFilter {
                             op:    RatingFilterOp::AtLeast,
@@ -632,7 +599,7 @@ impl RivettApp {
 
                 let has_db = self.db.is_some();
                 ui.add_enabled_ui(has_db, |ui| {
-                    ui.menu_button("Global Filter (entire library)", |ui| {
+                    ui.menu_button("Library", |ui| {
                         for r in 1..=5 {
                             let filter = RatingFilter {
                                 op:    RatingFilterOp::AtLeast,
