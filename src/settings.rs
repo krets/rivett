@@ -63,6 +63,8 @@ pub struct AppSettings {
     pub window_geometry: Option<WindowGeometry>,
     /// Override for the central DB path; `None` → platform default.
     pub central_db_path: Option<PathBuf>,
+    /// Whether the info panel is visible.
+    pub show_info_panel: bool,
 }
 
 impl Default for AppSettings {
@@ -72,6 +74,7 @@ impl Default for AppSettings {
             db_mode:         DbMode::Central,
             window_geometry: None,
             central_db_path: None,
+            show_info_panel: false, // Collapsed by default
         }
     }
 }
@@ -128,6 +131,7 @@ mod tests {
         assert_eq!(s.db_mode, DbMode::Central);
         assert!(s.window_geometry.is_none());
         assert!(s.central_db_path.is_none());
+        assert!(!s.show_info_panel);
     }
 
     #[test]
@@ -162,12 +166,14 @@ mod tests {
             db_mode:         DbMode::Both,
             window_geometry: Some(WindowGeometry { x: 50, y: 50, width: 1920, height: 1080 }),
             central_db_path: Some(PathBuf::from("/tmp/test.db")),
+            show_info_panel: true,
         };
         let json     = serde_json::to_string(&original).unwrap();
         let restored: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.default_sort,    original.default_sort);
         assert_eq!(restored.db_mode,         original.db_mode);
         assert_eq!(restored.central_db_path, original.central_db_path);
+        assert_eq!(restored.show_info_panel, original.show_info_panel);
         let geom = restored.window_geometry.unwrap();
         assert_eq!(geom.width, 1920);
         assert_eq!(geom.height, 1080);

@@ -56,7 +56,7 @@ impl RivettApp {
             current_path:    None,
             current_record:  None,
             metadata:        vec![],
-            show_info_panel: true,
+            show_info_panel: settings.show_info_panel,
             toast:           None,
             delete_confirm:  None,
             settings,
@@ -352,7 +352,11 @@ impl RivettApp {
             self.navigate_prev(ctx, preserve_zoom);
         }
 
-        if input.key_pressed(Key::I) { self.show_info_panel = !self.show_info_panel; }
+        if input.key_pressed(Key::I) { 
+            self.show_info_panel = !self.show_info_panel;
+            self.settings.show_info_panel = self.show_info_panel;
+            let _ = self.settings.save();
+        }
 
         for r in 0..=5 {
             let key = match r {
@@ -663,6 +667,8 @@ impl RivettApp {
             let info_label = if self.show_info_panel { "Hide info" } else { "Show info" };
             if ui.add(egui::Button::new(info_label).shortcut_text("I")).clicked() {
                 self.show_info_panel = !self.show_info_panel;
+                self.settings.show_info_panel = self.show_info_panel;
+                let _ = self.settings.save();
                 ui.close_menu();
             }
 
