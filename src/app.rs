@@ -20,14 +20,7 @@ mod win_drag {
     pub use windows::Win32::System::Com::*;
     pub use windows::Win32::System::Memory::*;
     pub use windows::Win32::System::Ole::*;
-    pub use windows::Win32::System::DataExchange::*;
     pub use windows::Win32::UI::Shell::*;
-    pub use windows::Win32::UI::Input::KeyboardAndMouse::*;
-
-    // Explicitly import implementation traits which might not be picked up by *
-    // these are required by the #[windows_core::implement] macro.
-    pub use windows::Win32::System::Com::IDataObject_Impl;
-    pub use windows::Win32::System::Ole::IDropSource_Impl;
 
     // Mouse button constants for drag and drop state
     pub const MK_LBUTTON: u32 = 0x0001;
