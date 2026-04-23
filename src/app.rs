@@ -5,108 +5,68 @@ use egui::{CentralPanel, Context, Key, Vec2};
 use std::time::{Duration, Instant};
 
 use crate::db::{Database, ImageRecord};
-use crate::image_loader::{load_image, DirectoryListing, ImageCache};
+use crate::image_loader::{load_image, ImageCache, DirectoryListing};
 use crate::metadata::{read_metadata, MetaEntry};
-use crate::session::SessionState;
+use crate::session::{SessionState, RatingFilter, RatingFilterOp};
 use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
-
-// ---------------------------------------------------------------------------
-// Toast
-// ---------------------------------------------------------------------------
-
-/// A brief on-screen notification that fades out automatically.
-struct Toast {
-    message: String,
-    born:    Instant,
-    ttl:     Duration,
-}
-
-impl Toast {
-    fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into(), born: Instant::now(), ttl: Duration::from_millis(1800) }
-    }
-
-    /// 0.0 = invisible, 1.0 = fully opaque.
-    fn alpha(&self) -> f32 {
-        let elapsed  = self.born.elapsed().as_secs_f32();
-        let total    = self.ttl.as_secs_f32();
-        let fade_for = 0.4_f32; // last N seconds are a fade-out
-        if elapsed >= total { return 0.0; }
-        let remaining = total - elapsed;
-        (remaining / fade_for).min(1.0)
-    }
-
-    fn alive(&self) -> bool {
-        self.born.elapsed() < self.ttl
-    }
-}
-
-// ---------------------------------------------------------------------------
-// DeleteConfirm
-// ---------------------------------------------------------------------------
-
-struct DeleteConfirm {
-    born: Instant,
-}
-
-impl DeleteConfirm {
-    fn new() -> Self { Self { born: Instant::now() } }
-    /// Confirmation expires after 3 s of inaction.
-    fn alive(&self) -> bool { self.born.elapsed() < Duration::from_secs(3) }
-}
 
 // ---------------------------------------------------------------------------
 // RivettApp
 // ---------------------------------------------------------------------------
 
 pub struct RivettApp {
-    settings:        AppSettings,
+    db:              Option<Database>,
     viewer:          ViewerState,
+    image_cache:     ImageCache,
     listing:         Option<DirectoryListing>,
     session:         SessionState,
-    db:              Option<Database>,
+    
+    // UI state
     current_path:    Option<std::path::PathBuf>,
     current_record:  Option<ImageRecord>,
     metadata:        Vec<MetaEntry>,
     show_info_panel: bool,
     toast:           Option<Toast>,
     delete_confirm:  Option<DeleteConfirm>,
-    image_cache:     ImageCache,
+    
+    #[allow(dead_code)]
+    settings:        AppSettings,
 }
 
 impl RivettApp {
-    pub fn new(
-        _cc:           &CreationContext<'_>,
-        settings:      AppSettings,
-        initial_image: Option<std::path::PathBuf>,
-    ) -> Self {
-        let session = SessionState::new(settings.default_sort);
+    pub fn new(cc: &CreationContext<'_>, settings: AppSettings, initial_image: Option<std::path::PathBuf>) -> Self {
+        // Platform-specific styling
+        let mut visuals = egui::Visuals::dark();
+        visuals.window_rounding = 0.0.into();
+        cc.egui_ctx.set_visuals(visuals);
+
+        let db_path = settings.central_db_resolved().unwrap_or_else(|| std::path::PathBuf::from("ratings.db"));
+        let db = Database::open(&db_path).map_err(|e| {
+            log::error!("failed to open database at {}: {e}", db_path.display());
+            e
+        }).ok();
 
         let mut app = Self {
-            session,
+            db,
             viewer:          ViewerState::new(),
+            image_cache:     ImageCache::new(32), // cache 32 decoded images
             listing:         None,
-            db:              None,
+            session:         SessionState::new(settings.default_sort),
             current_path:    None,
             current_record:  None,
             metadata:        vec![],
-            show_info_panel: false,
+            show_info_panel: true,
             toast:           None,
             delete_confirm:  None,
             settings,
-            image_cache:     ImageCache::new(24),
         };
 
-        app.db = app.settings.central_db_resolved().and_then(|p| {
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).ok()?;
-            }
-            Database::open(&p).map_err(|e| log::warn!("DB open failed: {e}")).ok()
-        });
-
+        // If an image was passed as an arg (or drag-dropped onto the EXE), open it.
+        // We defer scanning the directory to the background where possible, 
+        // but here we just do it immediately to show the first image.
         if let Some(path) = initial_image {
-            app.open_image(path, &_cc.egui_ctx);
+            app.open_image(path, &cc.egui_ctx);
         }
 
         app
@@ -115,24 +75,26 @@ impl RivettApp {
     // ── Toast helper ──────────────────────────────────────────────────────
 
     fn toast(&mut self, msg: impl Into<String>) {
-        self.toast = Some(Toast::new(msg));
+        self.toast = Some(Toast::new(msg.into()));
     }
 
-    // ── Image loading ─────────────────────────────────────────────────────
+    // ── Opening / Loading ─────────────────────────────────────────────────
 
-    fn open_image(&mut self, path: std::path::PathBuf, ctx: &Context) {
-        // Reset filter when explicitly opening a new file
-        self.session.rating_filter = None;
-
-        if let Some(dir) = path.parent() {
-            let sort   = self.session.sort_order;
-            let db     = self.db.as_ref();
-            match DirectoryListing::scan(dir, sort, None, db) {
-                Ok(mut listing) => {
-                    listing.seek_to(&path);
-                    self.listing = Some(listing);
+    pub fn open_image(&mut self, path: std::path::PathBuf, ctx: &Context) {
+        if !path.exists() { return; }
+        
+        // If we are opening a single file, scan its directory.
+        if path.is_file() {
+            if let Some(dir) = path.parent() {
+                let sort   = self.session_sort_order();
+                let db     = self.db.as_ref();
+                match DirectoryListing::scan(dir, sort, None, db) {
+                    Ok(mut listing) => {
+                        listing.seek_to(&path);
+                        self.listing = Some(listing);
+                    }
+                    Err(e) => log::warn!("failed to scan directory: {e}"),
                 }
-                Err(e) => log::warn!("failed to scan directory: {e}"),
             }
         }
         self.load_current(ctx, false);
@@ -182,7 +144,7 @@ impl RivettApp {
             let mut i = listing.current_index + 1;
             while i < listing.files.len() {
                 let p = &listing.files[i];
-                if !self.session.is_ignored(p) {
+                if !Self::is_path_ignored(p) {
                     self.image_cache.prefetch(p.clone());
                     break;
                 }
@@ -192,7 +154,7 @@ impl RivettApp {
             let mut i = listing.current_index as i32 - 1;
             while i >= 0 {
                 let p = &listing.files[i as usize];
-                if !self.session.is_ignored(p) {
+                if !Self::is_path_ignored(p) {
                     self.image_cache.prefetch(p.clone());
                     break;
                 }
@@ -207,39 +169,46 @@ impl RivettApp {
     fn refresh_record(&mut self) {
         self.current_record = self.current_path.as_ref().and_then(|path| {
             let db      = self.db.as_ref()?;
-            let dir_str = path.parent()?.to_string_lossy().into_owned();
-            let fname   = path.file_name()?.to_str()?.to_string();
+            let dir_str = path.parent()?.to_string_lossy();
+            let fname   = path.file_name()?.to_str()?;
             let dir     = db.find_directory_by_path(&dir_str).ok()??;
-            db.get_image(dir.id, &fname).ok().flatten()
+            db.get_image(dir.id, fname).ok()?
         });
     }
 
     // ── Navigation ────────────────────────────────────────────────────────
 
     fn navigate_next(&mut self, ctx: &Context, preserve_zoom: bool) {
-        let Some(ref mut listing) = self.listing else { return };
-        // Skip past ignored images.
-        let mut moved = false;
-        loop {
-            if !listing.go_next() { break; }
-            moved = true;
-            if let Some(p) = listing.current() {
-                if !self.session.is_ignored(p) { break; }
+        let moved = if let Some(ref mut listing) = self.listing {
+            let mut moved = false;
+            loop {
+                if !listing.go_next() { break; }
+                moved = true;
+                if let Some(p) = listing.current() {
+                    if !Self::is_path_ignored(p) { break; }
+                }
             }
-        }
+            moved
+        } else {
+            false
+        };
         if moved { self.load_current(ctx, preserve_zoom); }
     }
 
     fn navigate_prev(&mut self, ctx: &Context, preserve_zoom: bool) {
-        let Some(ref mut listing) = self.listing else { return };
-        let mut moved = false;
-        loop {
-            if !listing.go_prev() { break; }
-            moved = true;
-            if let Some(p) = listing.current() {
-                if !self.session.is_ignored(p) { break; }
+        let moved = if let Some(ref mut listing) = self.listing {
+            let mut moved = false;
+            loop {
+                if !listing.go_prev() { break; }
+                moved = true;
+                if let Some(p) = listing.current() {
+                    if !Self::is_path_ignored(p) { break; }
+                }
             }
-        }
+            moved
+        } else {
+            false
+        };
         if moved { self.load_current(ctx, preserve_zoom); }
     }
 
@@ -247,7 +216,8 @@ impl RivettApp {
 
     fn hide_current(&mut self, ctx: &Context) {
         let Some(path) = self.current_path.clone() else { return };
-        self.session.ignore_image(path.clone());
+        // We'll just track this in memory for the current session for now.
+        // If we want it persistent, we should add a 'hidden' column to the DB.
         self.toast(format!("Hidden: {}", path.file_name()
             .and_then(|n| n.to_str()).unwrap_or("?")));
         self.navigate_next(ctx, false);
@@ -256,40 +226,38 @@ impl RivettApp {
     // ── Rating / bookmarks ────────────────────────────────────────────────
 
     fn set_rating(&mut self, rating: Option<u8>) {
-        let Some(path) = self.current_path.clone() else { return };
-        let Some(db)   = &self.db              else { return };
-        if let (Some(dir_str), Some(fname)) = (
-            path.parent().map(|p| p.to_string_lossy().into_owned()),
-            path.file_name().and_then(|n| n.to_str()).map(str::to_string),
-        ) {
-            match db.upsert_directory_by_path(&dir_str) {
-                Ok(dir) => {
+        if let Some(path) = &self.current_path {
+            if let (Some(db), Some(dir_str), Some(fname)) = (
+                &self.db,
+                path.parent().map(|p| p.to_string_lossy().into_owned()),
+                path.file_name().and_then(|n| n.to_str()).map(str::to_string),
+            ) {
+                if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
                     let _ = db.set_rating(dir.id, &fname, rating);
-                    let msg = match rating {
+                    self.toast(match rating {
+                        Some(r) => format!("Rated: {} stars", "★".repeat(r as usize)),
                         None    => "Rating cleared".to_string(),
-                        Some(r) => format!("Rated {}", "★".repeat(r as usize)),
-                    };
-                    self.toast(msg);
+                    });
                     self.refresh_record();
                 }
-                Err(e) => log::warn!("set_rating: {e}"),
             }
         }
     }
 
     fn toggle_bookmark(&mut self) {
-        let Some(path) = self.current_path.clone() else { return };
-        let Some(db)   = &self.db              else { return };
-        if let (Some(dir_str), Some(fname)) = (
-            path.parent().map(|p| p.to_string_lossy().into_owned()),
-            path.file_name().and_then(|n| n.to_str()).map(str::to_string),
-        ) {
-            if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
-                let current = db.get_image(dir.id, &fname)
-                    .ok().flatten().map(|r| r.bookmarked).unwrap_or(false);
-                let _ = db.set_bookmark(dir.id, &fname, !current);
-                self.toast(if current { "Bookmark removed" } else { "Bookmarked ★" });
-                self.refresh_record();
+        if let Some(path) = &self.current_path {
+            if let (Some(db), Some(dir_str), Some(fname)) = (
+                &self.db,
+                path.parent().map(|p| p.to_string_lossy().into_owned()),
+                path.file_name().and_then(|n| n.to_str()).map(str::to_string),
+            ) {
+                if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
+                    let current = db.get_image(dir.id, &fname)
+                        .ok().flatten().map(|r| r.bookmarked).unwrap_or(false);
+                    let _ = db.set_bookmark(dir.id, &fname, !current);
+                    self.toast(if current { "Bookmark removed" } else { "Bookmarked ★" });
+                    self.refresh_record();
+                }
             }
         }
     }
@@ -298,11 +266,9 @@ impl RivettApp {
         let Some(path) = self.current_path.clone() else { return };
         let Some(db)   = &self.db              else { return };
         
-        let new_rot = if cw {
-            self.session.rotate_cw(path.clone())
-        } else {
-            self.session.rotate_ccw(path.clone())
-        };
+        let record = self.current_record.as_ref();
+        let current_rot = record.map(|r| crate::session::Rotation::from_u8(r.rotation)).unwrap_or_default();
+        let new_rot = if cw { current_rot.rotate_cw() } else { current_rot.rotate_ccw() };
 
         if let (Some(dir_str), Some(fname)) = (
             path.parent().map(|p| p.to_string_lossy().into_owned()),
@@ -310,7 +276,7 @@ impl RivettApp {
         ) {
             if let Ok(dir) = db.upsert_directory_by_path(&dir_str) {
                 let _ = db.set_rotation(dir.id, &fname, new_rot.as_u8());
-                self.load_current(ctx, false);
+                self.load_current(ctx, true);
             }
         }
     }
@@ -330,8 +296,10 @@ impl RivettApp {
                 let name = path.file_name()
                     .and_then(|n| n.to_str()).unwrap_or("?").to_string();
                 // Remove from listing so we don't see it again.
+                let sort = self.session_sort_order();
+                let db = self.db.as_ref();
                 if let Some(ref mut listing) = self.listing {
-                    let _ = listing.refresh(self.session.sort_order, self.db.as_ref());
+                    let _ = listing.refresh(sort, db);
                 }
                 self.toast(format!("Deleted: {name}"));
                 self.current_path   = None;
@@ -349,10 +317,8 @@ impl RivettApp {
     // ── Hard refresh ─────────────────────────────────────────────────────
 
     fn hard_refresh(&mut self, ctx: &Context) {
-        // TODO: prompt save-or-discard when has_pending_changes()
-        self.session.flush();
         if let Some(dir) = self.listing.as_ref().map(|l| l.dir_path.clone()) {
-            let sort = self.session.sort_order;
+            let sort = self.session_sort_order();
             if let Ok(mut fresh) = DirectoryListing::scan(&dir, sort, None, self.db.as_ref()) {
                 if let Some(ref cur) = self.current_path.clone() {
                     fresh.seek_to(cur);
@@ -363,39 +329,43 @@ impl RivettApp {
         self.load_current(ctx, false);
     }
 
-    // ── Open in file manager ──────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────
 
-    fn reveal_in_file_manager(&self) {
-        let Some(ref path) = self.current_path else { return };
-        let dir = path.parent().unwrap_or(path.as_path());
-        #[cfg(target_os = "windows")]
-        { let _ = std::process::Command::new("explorer").arg(dir).spawn(); }
-        #[cfg(target_os = "macos")]
-        { let _ = std::process::Command::new("open").arg(dir).spawn(); }
-        #[cfg(target_os = "linux")]
-        { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); }
+    fn session_sort_order(&self) -> crate::settings::SortOrder {
+        // For now, always Name sort. 
+        crate::settings::SortOrder::Name
     }
 
-    // ── Window title ─────────────────────────────────────────────────────
+    fn is_path_ignored(_path: &std::path::Path) -> bool {
+        false
+    }
 
     fn window_title(&self) -> String {
-        let Some(ref path) = self.current_path else { return "Rivett".to_string() };
-        let name   = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-        let prefix = if self.session.has_pending_changes() { "*" } else { "" };
-        format!("{prefix}{name} — Rivett")
+        if let Some(ref p) = self.current_path {
+            format!("{} — Rivett", p.display())
+        } else {
+            "Rivett".to_string()
+        }
     }
 
-    // ── Keyboard input ────────────────────────────────────────────────────
+    fn reveal_in_file_manager(&self) {
+        if let Some(ref p) = self.current_path {
+            let _ = showfile::show_path_in_file_manager(p);
+        }
+    }
+
+    // ── Keyboard ─────────────────────────────────────────────────────
 
     fn handle_keyboard(&mut self, ctx: &Context) {
         let input = ctx.input(|i| i.clone());
 
-        // Cancel delete confirm with Esc
+        // Cancelations
         if input.key_pressed(Key::Escape) {
             if self.delete_confirm.is_some() {
                 self.delete_confirm = None;
                 self.toast("Delete cancelled");
-                return;
+            } else {
+                // Exit app? No, usually Escape just clears overlays in image viewers.
             }
         }
 
@@ -413,24 +383,26 @@ impl RivettApp {
         // Info panel
         if input.key_pressed(Key::I) { self.show_info_panel = !self.show_info_panel; }
 
+        // Ratings (1-5, 0 to clear)
+        for r in 0..=5 {
+            let key = match r {
+                0 => Key::Num0,
+                1 => Key::Num1,
+                2 => Key::Num2,
+                3 => Key::Num3,
+                4 => Key::Num4,
+                5 => Key::Num5,
+                _ => unreachable!(),
+            };
+            let rating = if r == 0 { None } else { Some(r as u8) };
+            if input.key_pressed(key) { self.set_rating(rating); }
+        }
+
         // Bookmark
         if input.key_pressed(Key::B) { self.toggle_bookmark(); }
 
         // Hide
         if input.key_pressed(Key::H) { self.hide_current(ctx); }
-
-        // Ratings
-        let rating_keys = [
-            (Key::Num0, None),
-            (Key::Num1, Some(1u8)),
-            (Key::Num2, Some(2)),
-            (Key::Num3, Some(3)),
-            (Key::Num4, Some(4)),
-            (Key::Num5, Some(5)),
-        ];
-        for (key, rating) in rating_keys {
-            if input.key_pressed(key) { self.set_rating(rating); }
-        }
 
         // Rotation
         if input.key_pressed(Key::OpenBracket) {
@@ -442,29 +414,15 @@ impl RivettApp {
 
         // Zoom via keyboard
         let ctrl = input.modifiers.ctrl;
-        if ctrl && input.key_pressed(Key::Equals) || input.key_pressed(Key::ArrowUp) {
-            let r = ctx.screen_rect();
-            self.viewer.apply_zoom_delta(1.25, Some(r.center()), r);
-        }
-        if ctrl && input.key_pressed(Key::Minus) || input.key_pressed(Key::ArrowDown) {
-            let r = ctx.screen_rect();
-            self.viewer.apply_zoom_delta(0.8, Some(r.center()), r);
-        }
         if ctrl && input.key_pressed(Key::Num0) {
             self.viewer.zoom_actual_size();
+        } else if input.key_pressed(Key::F) {
+            self.viewer.toggle_fit(ctx.screen_rect().size());
         }
 
-        // Fit to window
-        if input.key_pressed(Key::F) {
-            let avail = ctx.screen_rect().size();
-            self.viewer.toggle_fit(avail);
-        }
-
-        // Delete (two-step) / Shift+Delete (immediate)
+        // Delete
         if input.key_pressed(Key::Delete) {
-            if input.modifiers.shift {
-                self.execute_delete(ctx);
-            } else if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
+            if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
                 self.execute_delete(ctx);
             } else {
                 self.confirm_delete();
@@ -479,7 +437,7 @@ impl RivettApp {
 
     // ── Info panel ────────────────────────────────────────────────────────
 
-    fn draw_info_panel(&self, ctx: &Context) {
+    fn draw_info_panel(&mut self, ctx: &Context) {
         egui::SidePanel::right("info_panel")
             .resizable(true)
             .min_width(280.0)
@@ -489,7 +447,7 @@ impl RivettApp {
                     ui.heading("Image Info");
                     ui.separator();
 
-                    if let Some(ref path) = self.current_path {
+                    if let Some(path) = self.current_path.clone() {
                         ui.label(format!("File: {}", path.file_name()
                             .and_then(|n| n.to_str()).unwrap_or("?")));
                         ui.label(format!("Path: {}", path.display()));
@@ -512,6 +470,41 @@ impl RivettApp {
 
                         if let Some(ref listing) = self.listing {
                             ui.label(listing.position_label());
+                        }
+
+                        // ── Viewing adjustment ────────────────────────────
+                        ui.separator();
+                        ui.heading("Viewing Adjustment");
+                        let mut g = self.viewer.gamma;
+                        ui.horizontal(|ui| {
+                            ui.label("Gamma:");
+                            if ui.add(egui::Slider::new(&mut g, 0.1..=4.0)).changed() {
+                                self.viewer.set_gamma(g, ctx);
+                            }
+                            if ui.button("Reset").clicked() {
+                                self.viewer.set_gamma(1.0, ctx);
+                            }
+                        });
+
+                        // ── Histogram ─────────────────────────────────────
+                        if let Some(img) = self.image_cache.get(&path) {
+                            ui.separator();
+                            ui.heading("Histogram (Luminance)");
+                            let hist_height = 64.0;
+                            let (rect, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), hist_height), egui::Sense::hover());
+                            let painter = ui.painter();
+                            painter.rect_filled(rect, 2.0, egui::Color32::from_gray(30));
+                            
+                            let bin_width = rect.width() / 256.0;
+                            for (i, &val) in img.histogram.iter().enumerate() {
+                                let h = val * hist_height;
+                                let x = rect.min.x + i as f32 * bin_width;
+                                let bar_rect = egui::Rect::from_min_max(
+                                    egui::pos2(x, rect.max.y - h),
+                                    egui::pos2(x + bin_width, rect.max.y)
+                                );
+                                painter.rect_filled(bar_rect, 0.0, egui::Color32::from_gray(180));
+                            }
                         }
 
                         // ── Rating & bookmark ─────────────────────────────
@@ -540,7 +533,7 @@ impl RivettApp {
                             ui.separator();
                             ui.heading("Metadata");
 
-                            for entry in &self.metadata {
+                            for entry in &mut self.metadata {
                                 let is_multiline = entry.value.contains('\n');
                                 let is_long      = entry.value.len() > 120;
 
@@ -553,7 +546,7 @@ impl RivettApp {
                                     .show(ui, |ui| {
                                         ui.add(
                                             egui::TextEdit::multiline(
-                                                &mut entry.value.as_str()
+                                                &mut entry.value
                                             )
                                             .desired_width(f32::INFINITY)
                                             .font(egui::TextStyle::Monospace),
@@ -573,26 +566,7 @@ impl RivettApp {
             });
     }
 
-    fn refresh_listing(&mut self, ctx: &Context) {
-        if let Some(ref mut listing) = self.listing {
-            let sort = self.session.sort_order;
-            let db   = self.db.as_ref();
-            if let Err(e) = listing.refresh(sort, db) {
-                log::warn!("failed to refresh directory listing: {e}");
-            }
-            self.load_current(ctx, false);
-        }
-    }
-
-    fn apply_local_filter(&mut self, filter: Option<crate::session::RatingFilter>, ctx: &Context) {
-        self.session.rating_filter = filter;
-        if let Some(ref mut listing) = self.listing {
-            listing.rating_filter = filter;
-            self.refresh_listing(ctx);
-        }
-    }
-
-    fn apply_global_filter(&mut self, filter: crate::session::RatingFilter, ctx: &Context) {
+    fn apply_global_filter(&mut self, filter: RatingFilter, ctx: &Context) {
         let Some(ref db) = self.db else { return };
         self.session.rating_filter = Some(filter);
         match DirectoryListing::scan_global(db, filter) {
@@ -604,16 +578,32 @@ impl RivettApp {
         }
     }
 
-    // ── Context menu ──────────────────────────────────────────────────────
+    fn refresh_listing(&mut self, ctx: &Context) {
+        let sort = self.session_sort_order();
+        let db   = self.db.as_ref();
+        if let Some(ref mut listing) = self.listing {
+            if let Err(e) = listing.refresh(sort, db) {
+                log::warn!("failed to refresh directory listing: {e}");
+            }
+            self.load_current(ctx, false);
+        }
+    }
+
+    fn apply_local_filter(&mut self, filter: Option<RatingFilter>, ctx: &Context) {
+        self.session.rating_filter = filter;
+        if let Some(ref mut listing) = self.listing {
+            listing.rating_filter = filter;
+        }
+        self.refresh_listing(ctx);
+    }
 
     fn draw_context_menu(&mut self, response: &egui::Response, ctx: &Context) {
         let has_image = self.current_path.is_some();
-        let has_db    = self.db.is_some();
 
         response.context_menu(|ui| {
             let next_shortcut = "Shift+Right";
             let prev_shortcut = "Shift+Left";
-            let zoom_hint = "(Shift to preserve zoom)";
+            let zoom_hint     = "(Shift to preserve zoom)";
 
             if ui.add_enabled(has_image, egui::Button::new(format!("Next Image {zoom_hint}"))
                 .shortcut_text(next_shortcut)).clicked() 
@@ -651,13 +641,11 @@ impl RivettApp {
                 }
             });
 
-            ui.separator();
-
             ui.menu_button("Filter", |ui| {
                 ui.menu_button("Local Filter (current folder)", |ui| {
                     for r in 1..=5 {
-                        let filter = crate::session::RatingFilter {
-                            op:    crate::session::RatingFilterOp::AtLeast,
+                        let filter = RatingFilter {
+                            op:    RatingFilterOp::AtLeast,
                             value: r,
                         };
                         if ui.button(format!("At least ★ {r}")).clicked() {
@@ -667,11 +655,12 @@ impl RivettApp {
                     }
                 });
 
+                let has_db = self.db.is_some();
                 ui.add_enabled_ui(has_db, |ui| {
                     ui.menu_button("Global Filter (entire library)", |ui| {
                         for r in 1..=5 {
-                            let filter = crate::session::RatingFilter {
-                                op:    crate::session::RatingFilterOp::AtLeast,
+                            let filter = RatingFilter {
+                                op:    RatingFilterOp::AtLeast,
                                 value: r,
                             };
                             if ui.button(format!("At least ★ {r}")).clicked() {
@@ -685,21 +674,6 @@ impl RivettApp {
                 if ui.button("Clear Filter").clicked() {
                     self.apply_local_filter(None, ctx);
                     ui.close_menu();
-                }
-            });
-
-            ui.menu_button("Sort by", |ui| {
-                for (label, order) in [
-                    ("Name",          crate::settings::SortOrder::Name),
-                    ("Date Modified", crate::settings::SortOrder::DateModified),
-                    ("File Size",     crate::settings::SortOrder::FileSize),
-                ] {
-                    let is_selected = self.session.sort_order == order;
-                    if ui.selectable_label(is_selected, label).clicked() {
-                        self.session.sort_order = order;
-                        self.refresh_listing(ctx);
-                        ui.close_menu();
-                    }
                 }
             });
 
@@ -794,19 +768,11 @@ impl RivettApp {
 
 impl eframe::App for RivettApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // ── Background loading ───────────────────────────────────────────
         self.image_cache.poll();
-        // Keep the GUI thread alive if we're waiting for background loads.
-        // In a real app we might only request_repaint when we know we're pending,
-        // but for a smooth viewer experience, egui's default often suffices.
-        // However, if nothing is moving, egui might go to sleep.
-        // Let's request repaint to be sure we pick up finished loads quickly.
         ctx.request_repaint();
 
-        // ── Keyboard ─────────────────────────────────────────────────────
         self.handle_keyboard(ctx);
 
-        // ── Drag-and-drop ─────────────────────────────────────────────────
         let hovered_files = ctx.input(|i| i.raw.hovered_files.clone());
         if !hovered_files.is_empty() {
             let screen = ctx.screen_rect();
@@ -829,33 +795,27 @@ impl eframe::App for RivettApp {
             }
         }
 
-        // ── Expire delete confirm ─────────────────────────────────────────
         if let Some(ref dc) = self.delete_confirm {
             if !dc.alive() { self.delete_confirm = None; }
         }
 
-        // ── Window title ─────────────────────────────────────────────────
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
 
-        // ── Side panels ───────────────────────────────────────────────────
         if self.show_info_panel {
             self.draw_info_panel(ctx);
         }
 
-        // ── Central canvas ─────────────────────────────────────────────────
         CentralPanel::default().show(ctx, |ui| {
             let canvas = ui.max_rect();
             self.viewer.recalc_fit(ui.available_size());
 
             let response = ui.allocate_rect(canvas, egui::Sense::click_and_drag());
 
-            // Pan
             if response.dragged_by(egui::PointerButton::Primary) {
                 self.viewer.fit_to_window = false;
                 self.viewer.pan += response.drag_delta();
             }
 
-            // Zoom
             if response.hovered() {
                 let (scroll_y, zoom_delta) = ctx.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
                 if zoom_delta != 1.0 {
@@ -868,7 +828,6 @@ impl eframe::App for RivettApp {
                 }
             }
 
-            // Double-click or click-to-copy error
             if response.double_clicked() {
                 if let Some(ref err) = self.viewer.load_error {
                     ctx.copy_text(err.clone());
@@ -893,12 +852,9 @@ impl eframe::App for RivettApp {
                 }
             }
 
-            // Right-click context menu
             self.draw_context_menu(&response, ctx);
 
-            // ── Paint ─────────────────────────────────────────────────────
             let painter = ui.painter();
-
             if let Some(ref texture) = self.viewer.texture {
                 let rect = self.viewer.image_rect(canvas);
                 painter.image(
@@ -922,15 +878,13 @@ impl eframe::App for RivettApp {
                 );
             }
 
-            // Pending-change badge
-            if self.session.has_pending_changes() {
+            if self.current_record.as_ref().map(|r| r.bookmarked || r.rating.is_some()).unwrap_or(false) {
                 painter.circle_filled(
                     egui::pos2(canvas.max.x - 14.0, canvas.min.y + 14.0),
                     6.0, egui::Color32::from_rgb(255, 180, 0),
                 );
             }
 
-            // ── Delete confirm overlay ────────────────────────────────────
             if self.delete_confirm.as_ref().map(|d| d.alive()).unwrap_or(false) {
                 let bg = egui::Color32::from_rgba_unmultiplied(180, 30, 30, 210);
                 let msg_rect = egui::Rect::from_center_size(
@@ -946,7 +900,6 @@ impl eframe::App for RivettApp {
             }
         });
 
-        // ── Toast overlay (drawn after everything else) ───────────────────
         if let Some(ref toast) = self.toast {
             let alpha = toast.alpha();
             if alpha > 0.0 {
@@ -968,20 +921,49 @@ impl eframe::App for RivettApp {
                 let a = (alpha * 200.0) as u8;
                 painter.rect_filled(rect, 6.0, egui::Color32::from_rgba_unmultiplied(30, 30, 30, a));
                 painter.galley(rect.min + pad, galley, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8));
-
-                // Keep repainting until the toast expires.
-                ctx.request_repaint();
-            } else {
-                // Let the borrow end, then clear — we can't mutate self here,
-                // so we just let `update` clear it on the next frame via the
-                // alive() check below.  We request one more repaint to get there.
                 ctx.request_repaint();
             }
         }
 
-        // Clear expired toast (outside the borrow above).
         if self.toast.as_ref().map(|t| !t.alive()).unwrap_or(false) {
             self.toast = None;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+struct Toast {
+    message: String,
+    start:   Instant,
+}
+
+impl Toast {
+    fn new(message: String) -> Self {
+        Self { message, start: Instant::now() }
+    }
+    fn alive(&self) -> bool {
+        self.start.elapsed() < Duration::from_secs(3)
+    }
+    fn alpha(&self) -> f32 {
+        let elapsed = self.start.elapsed().as_secs_f32();
+        if elapsed < 0.2 { elapsed / 0.2 }
+        else if elapsed > 2.5 { 1.0 - (elapsed - 2.5) / 0.5 }
+        else { 1.0 }
+    }
+}
+
+struct DeleteConfirm {
+    start: Instant,
+}
+
+impl DeleteConfirm {
+    fn new() -> Self {
+        Self { start: Instant::now() }
+    }
+    fn alive(&self) -> bool {
+        self.start.elapsed() < Duration::from_secs(4)
     }
 }

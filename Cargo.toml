@@ -1,6 +1,6 @@
 [package]
 name        = "rivett"
-version = "0.2.0"
+version = "0.2.1"
 authors     = ["Rivett Developers <dev@rivett.com>"]
 edition     = "2021"
 description = "Rust Image Vetting Tool — fast, keyboard-driven image viewer"
@@ -10,7 +10,7 @@ license     = "MIT"
 name = "Rivett"
 identifier = "com.rivett.rivett"
 icon = ["resources/icon.png"]
-version = "0.2.0"
+version = "0.2.1"
 resources = []
 copyright = "Copyright © 2026 Rivett Developers. All rights reserved."
 category = "Graphics and Design"
@@ -61,6 +61,7 @@ env_logger  = "0.11"
 uuid        = { version = "1", features = ["v4"] }
 dirs        = "5"   # platform config/data directories
 rfd         = "0.14"  # native file/folder dialogs
+showfile    = "0.1"   # open file manager
 png         = "0.17"  # PNG chunk access for metadata (already transitive via image)
 exif        = { package = "kamadak-exif", version = "0.6" }
 

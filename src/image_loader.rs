@@ -193,9 +193,28 @@ use std::sync::mpsc::{self, Receiver, Sender};
 /// A fully decoded RGBA image ready for upload to the GPU.
 #[derive(Clone)]
 pub struct DecodedImage {
-    pub rgba:   Vec<u8>,
-    pub width:  u32,
-    pub height: u32,
+    pub rgba:      Vec<u8>,
+    pub width:     u32,
+    pub height:    u32,
+    /// Luminance histogram (256 bins).
+    pub histogram: Vec<f32>,
+}
+
+impl DecodedImage {
+    pub fn new(rgba: Vec<u8>, width: u32, height: u32) -> Self {
+        let mut hist = vec![0u32; 256];
+        for chunk in rgba.chunks_exact(4) {
+            // Simple luminance: 0.299R + 0.587G + 0.114B
+            let l = (chunk[0] as f32 * 0.299 + chunk[1] as f32 * 0.587 + chunk[2] as f32 * 0.114) as usize;
+            hist[l.min(255)] += 1;
+        }
+        
+        // Normalize histogram
+        let max = *hist.iter().max().unwrap_or(&1) as f32;
+        let histogram = hist.into_iter().map(|v| v as f32 / max).collect();
+
+        Self { rgba, width, height, histogram }
+    }
 }
 
 /// Decode `path` into a [`DecodedImage`].
@@ -238,11 +257,7 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    Ok(DecodedImage {
-        rgba: rgba.into_raw(),
-        width,
-        height,
-    })
+    Ok(DecodedImage::new(rgba.into_raw(), width, height))
 }
 
 fn load_raw(path: &Path) -> Result<DecodedImage, String> {
@@ -282,7 +297,7 @@ fn load_raw(path: &Path) -> Result<DecodedImage, String> {
 
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
-                Ok(DecodedImage { rgba: rgba.into_raw(), width, height })
+                Ok(DecodedImage::new(rgba.into_raw(), width, height))
             } else {
                 Err("Raw sensor data requires debayering (not yet implemented)".to_string())
             }
@@ -326,11 +341,7 @@ fn load_cr3(path: &Path) -> Result<DecodedImage, String> {
 
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
-        Ok(DecodedImage {
-            rgba: rgba.into_raw(),
-            width,
-            height,
-        })
+        Ok(DecodedImage::new(rgba.into_raw(), width, height))
     } else {
         Err("Could not find embedded JPEG preview in .CR3 file".to_string())
     }
@@ -366,11 +377,7 @@ fn load_svg(path: &Path) -> Result<DecodedImage, String> {
     
     resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pixmap.as_mut());
     
-    Ok(DecodedImage {
-        rgba: pixmap.take(),
-        width: pixmap_size.width(),
-        height: pixmap_size.height(),
-    })
+    Ok(DecodedImage::new(pixmap.take(), pixmap_size.width(), pixmap_size.height()))
 }
 
 /// Simple LRU cache for decoded images.
