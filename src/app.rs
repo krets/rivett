@@ -12,6 +12,9 @@ use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
 
 #[cfg(windows)]
+extern crate windows_core;
+
+#[cfg(windows)]
 mod win_drag {
     pub use windows::core::HRESULT;
     pub use windows::Win32::Foundation::*;
@@ -19,7 +22,8 @@ mod win_drag {
     pub use windows::Win32::System::Memory::*;
     pub use windows::Win32::System::Ole::*;
     pub use windows::Win32::UI::Shell::*;
-    pub use windows::Win32::UI::Input::KeyboardAndMouse::MODIFIERKEYS_FLAGS;
+    // This is where MODIFIERKEYS_FLAGS lives in 0.58
+    pub use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 
     // Mouse button constants for drag and drop state
     pub const MK_LBUTTON: u32 = 0x0001;
@@ -986,10 +990,7 @@ struct FileDataObject {
 }
 
 #[cfg(windows)]
-use windows::Win32::System::Com::IDataObject_Impl;
-
-#[cfg(windows)]
-impl IDataObject_Impl for FileDataObject {
+impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
     fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> windows::core::Result<win_drag::STGMEDIUM> {
         unsafe {
             let formatetc = *pformatetc;
@@ -1061,15 +1062,12 @@ impl Drop for FileDataObject {
 struct FileDropSource;
 
 #[cfg(windows)]
-use windows::Win32::System::Ole::IDropSource_Impl;
-
-#[cfg(windows)]
-impl IDropSource_Impl for FileDropSource {
-    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
+impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
+    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: u32) -> win_drag::HRESULT {
         if fescapepressed.as_bool() {
             return win_drag::DRAGDROP_S_CANCEL;
         }
-        if (grfkeystates.0 & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
+        if (grfkeystates & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
             return win_drag::DRAGDROP_S_DROP;
         }
         win_drag::S_OK
