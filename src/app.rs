@@ -979,18 +979,18 @@ impl RivettApp {
 }
 
 #[cfg(windows)]
-#[windows::core::implement(windows::Win32::System::Com::IDataObject)]
+#[windows_core::implement(windows::Win32::System::Com::IDataObject)]
 struct FileDataObject {
     hdrop: win_drag::HGLOBAL,
 }
 
 #[cfg(windows)]
-impl win_drag::IDataObject_Impl for FileDataObject {
-    fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> windows::core::Result<win_drag::STGMEDIUM> {
+impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
+    fn GetData(&self, pformatetc: *const windows::Win32::System::Com::FORMATETC) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
         unsafe {
             let formatetc = *pformatetc;
             if formatetc.cfFormat == win_drag::CF_HDROP.0 as u16 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
-                let mut medium = win_drag::STGMEDIUM::default();
+                let mut medium = windows::Win32::System::Com::STGMEDIUM::default();
                 medium.tymed = win_drag::TYMED_HGLOBAL.0 as u32;
                 medium.u.hGlobal = duplicate_hglobal(self.hdrop)?;
                 return Ok(medium);
@@ -999,11 +999,11 @@ impl win_drag::IDataObject_Impl for FileDataObject {
         }
     }
 
-    fn GetDataHere(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *mut win_drag::STGMEDIUM) -> windows::core::Result<()> {
+    fn GetDataHere(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _pmedium: *mut windows::Win32::System::Com::STGMEDIUM) -> windows::core::Result<()> {
         Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
     }
 
-    fn QueryGetData(&self, pformatetc: *const win_drag::FORMATETC) -> win_drag::HRESULT {
+    fn QueryGetData(&self, pformatetc: *const windows::Win32::System::Com::FORMATETC) -> windows::core::HRESULT {
         unsafe {
             let formatetc = *pformatetc;
             if formatetc.cfFormat == win_drag::CF_HDROP.0 as u16 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
@@ -1013,7 +1013,7 @@ impl win_drag::IDataObject_Impl for FileDataObject {
         }
     }
 
-    fn GetCanonicalFormatEtc(&self, _pformatectin: *const win_drag::FORMATETC, pformatetcout: *mut win_drag::FORMATETC) -> win_drag::HRESULT {
+    fn GetCanonicalFormatEtc(&self, _pformatectin: *const windows::Win32::System::Com::FORMATETC, pformatetcout: *mut windows::Win32::System::Com::FORMATETC) -> windows::core::HRESULT {
         unsafe {
             if !pformatetcout.is_null() {
                 (*pformatetcout).ptd = std::ptr::null_mut();
@@ -1022,15 +1022,15 @@ impl win_drag::IDataObject_Impl for FileDataObject {
         }
     }
 
-    fn SetData(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *const win_drag::STGMEDIUM, _frelease: win_drag::BOOL) -> windows::core::Result<()> {
+    fn SetData(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _pmedium: *const windows::Win32::System::Com::STGMEDIUM, _frelease: windows::Win32::Foundation::BOOL) -> windows::core::Result<()> {
         Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
     }
 
-    fn EnumFormatEtc(&self, _dwdirection: u32) -> windows::core::Result<win_drag::IEnumFORMATETC> {
+    fn EnumFormatEtc(&self, _dwdirection: u32) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
         Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
     }
 
-    fn DAdvise(&self, _pformatetc: *const win_drag::FORMATETC, _advf: u32, _padvsink: Option<&win_drag::IAdviseSink>) -> windows::core::Result<u32> {
+    fn DAdvise(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _advf: u32, _padvsink: Option<&windows::Win32::System::Com::IAdviseSink>) -> windows::core::Result<u32> {
         Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
     }
 
@@ -1038,7 +1038,7 @@ impl win_drag::IDataObject_Impl for FileDataObject {
         Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
     }
 
-    fn EnumDAdvise(&self) -> windows::core::Result<win_drag::IEnumSTATDATA> {
+    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
         Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
     }
 }
@@ -1053,24 +1053,22 @@ impl Drop for FileDataObject {
 }
 
 #[cfg(windows)]
-#[windows::core::implement(windows::Win32::System::Ole::IDropSource)]
+#[windows_core::implement(windows::Win32::System::Ole::IDropSource)]
 struct FileDropSource;
 
 #[cfg(windows)]
-impl win_drag::IDropSource_Impl for FileDropSource {
-    fn QueryContinueDrag(&self, fescapepressed: win_drag::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
+impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
+    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: u32) -> windows::core::HRESULT {
         if fescapepressed.as_bool() {
             return win_drag::DRAGDROP_S_CANCEL;
         }
-        let left_button = win_drag::MODIFIERKEYS_FLAGS(win_drag::MK_LBUTTON.0);
-        let right_button = win_drag::MODIFIERKEYS_FLAGS(win_drag::MK_RBUTTON.0);
-        if (grfkeystates.0 & (left_button.0 | right_button.0)) == 0 {
+        if (grfkeystates & (win_drag::MK_LBUTTON.0 | win_drag::MK_RBUTTON.0)) == 0 {
             return win_drag::DRAGDROP_S_DROP;
         }
         win_drag::S_OK
     }
 
-    fn GiveFeedback(&self, _dweffect: win_drag::DROPEFFECT) -> win_drag::HRESULT {
+    fn GiveFeedback(&self, _dweffect: windows::Win32::System::Ole::DROPEFFECT) -> windows::core::HRESULT {
         win_drag::DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
