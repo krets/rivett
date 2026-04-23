@@ -12,10 +12,8 @@ use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
 
 #[cfg(windows)]
-extern crate windows_core;
-
-#[cfg(windows)]
 mod win_drag {
+    pub use windows::core::HRESULT;
     pub use windows::Win32::Foundation::*;
     pub use windows::Win32::System::Com::*;
     pub use windows::Win32::System::Memory::*;
@@ -981,13 +979,13 @@ impl RivettApp {
 }
 
 #[cfg(windows)]
-#[windows_core::implement(windows::Win32::System::Com::IDataObject)]
+#[windows::core::implement(windows::Win32::System::Com::IDataObject)]
 struct FileDataObject {
     hdrop: win_drag::HGLOBAL,
 }
 
 #[cfg(windows)]
-impl win_drag::IDataObject_Impl for FileDataObject {
+impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
     fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> windows::core::Result<win_drag::STGMEDIUM> {
         unsafe {
             let formatetc = *pformatetc;
@@ -1059,7 +1057,7 @@ impl Drop for FileDataObject {
 struct FileDropSource;
 
 #[cfg(windows)]
-impl win_drag::IDropSource_Impl for FileDropSource {
+impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
     fn QueryContinueDrag(&self, fescapepressed: win_drag::BOOL, grfkeystates: u32) -> win_drag::HRESULT {
         if fescapepressed.as_bool() {
             return win_drag::DRAGDROP_S_CANCEL;
