@@ -70,26 +70,38 @@
                             <File Id='exe0' Name='rivett.exe' DiskId='1' Source='$(var.CargoTargetBinDir)\rivett.exe' KeyPath='yes'/>
                         </Component>
 
-                        <!-- Context Menu (Optional Feature) -->
-                        <Component Id='RegistryShell' Guid='*'>
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Type='string' Value='Open with Rivett' KeyPath='yes' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Name='Icon' Type='string' Value='[#exe0]' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
-                        </Component>
-
-                        <!-- File Associations (Optional Feature) -->
-                        <Component Id='RegistryAssoc' Guid='*'>
+                        <Component Id='RegistryProgId' Guid='*'>
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Type='string' Value='Rivett Image' KeyPath='yes' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image' Name='PerceivedType' Type='string' Value='image' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image\shell\open\command' Type='string' Value='&quot;[#exe0]&quot; &quot;%1&quot;' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.png\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.jpg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\Rivett.Image\shell\open\command' Type='string' Value='&quot;[Bin]rivett.exe&quot; &quot;%1&quot;' />
+                        </Component>
+
+                        <Component Id='RegistryShell' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett' Name='Icon' Type='string' Value='[Bin]rivett.exe' KeyPath='yes' />
+                            <RegistryValue Root='HKMU' Key='Software\Classes\*\shell\Rivett\command' Type='string' Value='&quot;[Bin]rivett.exe&quot; &quot;%1&quot;' />
+                        </Component>
+
+                        <Component Id='AssocPng' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.png\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
+                        </Component>
+                        <Component Id='AssocJpg' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.jpg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
                             <RegistryValue Root='HKMU' Key='Software\Classes\.jpeg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.webp\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.exr\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.svg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.cr3\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
-                            <RegistryValue Root='HKMU' Key='Software\Classes\.arw\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' />
+                        </Component>
+                        <Component Id='AssocWebp' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.webp\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
+                        </Component>
+                        <Component Id='AssocExr' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.exr\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
+                        </Component>
+                        <Component Id='AssocSvg' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.svg\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
+                        </Component>
+                        <Component Id='AssocCr3' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.cr3\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
+                        </Component>
+                        <Component Id='AssocArw' Guid='*'>
+                            <RegistryValue Root='HKMU' Key='Software\Classes\.arw\OpenWithProgids' Name='Rivett.Image' Type='string' Value='' KeyPath='yes' />
                         </Component>
                     </Directory>
                 </Directory>
@@ -103,48 +115,51 @@
             Level='1'
             ConfigurableDirectory='APPLICATIONFOLDER'
             AllowAdvertise='no'
-            Display='expand'
             Absent='disallow'>
             <ComponentRef Id='License'/>
             <ComponentRef Id='binary0'/>
+        </Feature>
 
-            <Feature
-                Id='Associations'
-                Title='File Associations'
-                Description='Register Rivett as an option for common image formats (PNG, JPG, RAW, etc.).'
-                Level='1'>
-                <ComponentRef Id='RegistryAssoc'/>
-            </Feature>
+        <Feature
+            Id='ContextMenu'
+            Title='Context Menu'
+            Description='Add "Open with Rivett" to the right-click context menu in File Explorer.'
+            Level='1'>
+            <ComponentRef Id='RegistryShell'/>
+        </Feature>
 
-            <Feature
-                Id='ContextMenu'
-                Title='Context Menu'
-                Description='Add "Open with Rivett" to the right-click menu in File Explorer.'
-                Level='1'>
-                <ComponentRef Id='RegistryShell'/>
-            </Feature>
+        <Feature
+            Id='FileAssociations'
+            Title='File Associations'
+            Description='Register Rivett in the "Open With" menu. Expand to choose individual formats.'
+            Level='1'>
+            <ComponentRef Id='RegistryProgId'/>
 
-            <Feature
-                Id='Environment'
-                Title='Add to PATH'
-                Description='Add Rivett to your system PATH for command-line use.'
-                Level='2'
-                Absent='allow'>
-                <ComponentRef Id='Path'/>
-            </Feature>
+            <Feature Id='AssocPngFeature' Title='PNG (.png)' Level='1'><ComponentRef Id='AssocPng'/></Feature>
+            <Feature Id='AssocJpgFeature' Title='JPEG (.jpg, .jpeg)' Level='1'><ComponentRef Id='AssocJpg'/></Feature>
+            <Feature Id='AssocWebpFeature' Title='WebP (.webp)' Level='1'><ComponentRef Id='AssocWebp'/></Feature>
+            <Feature Id='AssocExrFeature' Title='OpenEXR (.exr)' Level='1'><ComponentRef Id='AssocExr'/></Feature>
+            <Feature Id='AssocSvgFeature' Title='SVG (.svg)' Level='1'><ComponentRef Id='AssocSvg'/></Feature>
+            <Feature Id='AssocCr3Feature' Title='Canon RAW (.cr3)' Level='1'><ComponentRef Id='AssocCr3'/></Feature>
+            <Feature Id='AssocArwFeature' Title='Sony RAW (.arw)' Level='1'><ComponentRef Id='AssocArw'/></Feature>
+        </Feature>
+
+        <Feature Id='Environment' Title='Add to PATH' Description='Add Rivett to your system PATH.' Level='2' Absent='allow'>
+            <ComponentRef Id='Path'/>
         </Feature>
 
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
         <UI>
             <UIRef Id='WixUI_FeatureTree'/>
-            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
-            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+            <!-- Navigation to skip LicenseAgreementDlg -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='2'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='2'>1</Publish>
         </UI>
 
+        <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
         <WixVariable Id='WixUIBannerBmp' Value='wix\Banner.bmp'/>
         <WixVariable Id='WixUIDialogBmp' Value='wix\Dialog.bmp'/>
 
     </Product>
-
 </Wix>
