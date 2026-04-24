@@ -11,21 +11,6 @@ use crate::session::{SessionState, RatingFilter, RatingFilterOp};
 use crate::settings::AppSettings;
 use crate::viewer::ViewerState;
 
-#[cfg(windows)]
-mod win_drag {
-    pub use windows::core::HRESULT;
-    pub use windows::Win32::Foundation::*;
-    pub use windows::Win32::System::Com::*;
-    pub use windows::Win32::System::Memory::*;
-    pub use windows::Win32::System::Ole::*;
-    pub use windows::Win32::UI::Shell::*;
-    pub use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
-
-    // Mouse button constants for drag and drop state
-    pub const MK_LBUTTON: u32 = 0x0001;
-    pub const MK_RBUTTON: u32 = 0x0002;
-}
-
 // ---------------------------------------------------------------------------
 // RivettApp
 // ---------------------------------------------------------------------------
@@ -190,7 +175,6 @@ impl RivettApp {
             while listing.go_next() {
                 moved = true;
                 if let Some(p) = listing.current() {
-                    // Check ignored status without borrowing self
                     if !self.session.ignored_images.contains(p) { break; }
                 }
             }
@@ -822,8 +806,8 @@ impl eframe::App for RivettApp {
 
             #[cfg(windows)]
             {
-                let is_right_drag = response.dragged_by(egui::PointerButton::Secondary);
-                let is_ctrl_drag  = response.dragged_by(egui::PointerButton::Primary) && ctx.input(|i| i.modifiers.ctrl);
+                let is_right_drag = response.drag_started_by(egui::PointerButton::Secondary);
+                let is_ctrl_drag  = response.drag_started_by(egui::PointerButton::Primary) && ctx.input(|i| i.modifiers.ctrl);
 
                 if (is_right_drag || is_ctrl_drag) && self.current_path.is_some() {
                     if let Some(path) = self.current_path.clone() {
@@ -958,7 +942,8 @@ impl eframe::App for RivettApp {
 #[cfg(windows)]
 impl RivettApp {
     fn spawn_native_drag(&self, path: std::path::PathBuf) {
-        use win_drag::*;
+        use windows::Win32::System::Com::*;
+        use windows::Win32::System::Ole::*;
         
         std::thread::spawn(move || {
             unsafe {
@@ -969,7 +954,7 @@ impl RivettApp {
                     Err(_) => return,
                 };
                 
-                let data_object: windows::Win32::System::Com::IDataObject = FileDataObject { hdrop }.into();
+                let data_object: windows::Win32::System::Com::IDataObject = FileDataObject { hdrop: OwnedHGlobal(hdrop) }.into();
                 let drop_source: windows::Win32::System::Ole::IDropSource = FileDropSource.into();
                 
                 let mut effect = DROPEFFECT_NONE;
@@ -980,146 +965,156 @@ impl RivettApp {
 }
 
 #[cfg(windows)]
-#[windows_core::implement(windows::Win32::System::Com::IDataObject)]
-struct FileDataObject {
-    hdrop: win_drag::HGLOBAL,
+struct OwnedHGlobal(windows::Win32::Foundation::HGLOBAL);
+
+#[cfg(windows)]
+impl Drop for OwnedHGlobal {
+    fn drop(&mut self) {
+        unsafe { global_free(self.0); }
+    }
 }
 
 #[cfg(windows)]
-impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject {
-    fn GetData(&self, pformatetc: *const win_drag::FORMATETC) -> windows::core::Result<win_drag::STGMEDIUM> {
+#[windows_core::implement(windows::Win32::System::Com::IDataObject)]
+struct FileDataObject {
+    hdrop: OwnedHGlobal,
+}
+
+#[cfg(windows)]
+impl windows::Win32::System::Com::IDataObject_Impl for FileDataObject_Impl {
+    fn GetData(&self, pformatetc: *const windows::Win32::System::Com::FORMATETC) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
         unsafe {
             let formatetc = *pformatetc;
-            if formatetc.cfFormat == win_drag::CF_HDROP.0 as u16 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
-                let mut medium = win_drag::STGMEDIUM::default();
-                medium.tymed = win_drag::TYMED_HGLOBAL.0 as u32;
-                medium.u.hGlobal = duplicate_hglobal(self.hdrop)?;
+            if formatetc.cfFormat == windows::Win32::System::Ole::CF_HDROP.0 && (formatetc.tymed & windows::Win32::System::Com::TYMED_HGLOBAL.0 as u32) != 0 {
+                let mut medium = windows::Win32::System::Com::STGMEDIUM::default();
+                medium.tymed = windows::Win32::System::Com::TYMED_HGLOBAL.0 as u32;
+                medium.u.hGlobal = duplicate_hglobal(self.hdrop.0)?;
                 return Ok(medium);
             }
-            Err(windows::core::Error::from_hresult(win_drag::DV_E_FORMATETC))
+            Err(windows::core::Error::from_hresult(windows::Win32::Foundation::DV_E_FORMATETC))
         }
     }
 
-    fn GetDataHere(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *mut win_drag::STGMEDIUM) -> windows::core::Result<()> {
-        Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
+    fn GetDataHere(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _pmedium: *mut windows::Win32::System::Com::STGMEDIUM) -> windows::core::Result<()> {
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
     }
 
-    fn QueryGetData(&self, pformatetc: *const win_drag::FORMATETC) -> win_drag::HRESULT {
+    fn QueryGetData(&self, pformatetc: *const windows::Win32::System::Com::FORMATETC) -> windows::core::HRESULT {
         unsafe {
             let formatetc = *pformatetc;
-            if formatetc.cfFormat == win_drag::CF_HDROP.0 as u16 && (formatetc.tymed & win_drag::TYMED_HGLOBAL.0 as u32) != 0 {
-                return win_drag::S_OK;
+            if formatetc.cfFormat == windows::Win32::System::Ole::CF_HDROP.0 && (formatetc.tymed & windows::Win32::System::Com::TYMED_HGLOBAL.0 as u32) != 0 {
+                return windows::Win32::Foundation::S_OK;
             }
-            win_drag::DV_E_FORMATETC
+            windows::Win32::Foundation::DV_E_FORMATETC
         }
     }
 
-    fn GetCanonicalFormatEtc(&self, _pformatectin: *const win_drag::FORMATETC, pformatetcout: *mut win_drag::FORMATETC) -> win_drag::HRESULT {
+    fn GetCanonicalFormatEtc(&self, _pformatectin: *const windows::Win32::System::Com::FORMATETC, pformatetcout: *mut windows::Win32::System::Com::FORMATETC) -> windows::core::HRESULT {
         unsafe {
             if !pformatetcout.is_null() {
                 (*pformatetcout).ptd = std::ptr::null_mut();
             }
-            win_drag::E_NOTIMPL
+            windows::Win32::Foundation::E_NOTIMPL
         }
     }
 
-    fn SetData(&self, _pformatetc: *const win_drag::FORMATETC, _pmedium: *const win_drag::STGMEDIUM, _frelease: windows::Win32::Foundation::BOOL) -> windows::core::Result<()> {
-        Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
+    fn SetData(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _pmedium: *const windows::Win32::System::Com::STGMEDIUM, _frelease: windows::Win32::Foundation::BOOL) -> windows::core::Result<()> {
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
     }
 
-    fn EnumFormatEtc(&self, _dwdirection: u32) -> windows::core::Result<win_drag::IEnumFORMATETC> {
-        Err(windows::core::Error::from_hresult(win_drag::E_NOTIMPL))
+    fn EnumFormatEtc(&self, _dwdirection: u32) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
     }
 
-    fn DAdvise(&self, _pformatetc: *const win_drag::FORMATETC, _advf: u32, _padvsink: Option<&win_drag::IAdviseSink>) -> windows::core::Result<u32> {
-        Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
+    fn DAdvise(&self, _pformatetc: *const windows::Win32::System::Com::FORMATETC, _advf: u32, _padvsink: Option<&windows::Win32::System::Com::IAdviseSink>) -> windows::core::Result<u32> {
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED))
     }
 
     fn DUnadvise(&self, _dwconnection: u32) -> windows::core::Result<()> {
-        Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED))
     }
 
-    fn EnumDAdvise(&self) -> windows::core::Result<win_drag::IEnumSTATDATA> {
-        Err(windows::core::Error::from_hresult(win_drag::OLE_E_ADVISENOTSUPPORTED))
+    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+        Err(windows::core::Error::from_hresult(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED))
     }
 }
 
-#[cfg(windows)]
-impl Drop for FileDataObject {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = win_drag::GlobalFree(self.hdrop);
-        }
-    }
-}
 
 #[cfg(windows)]
 #[windows_core::implement(windows::Win32::System::Ole::IDropSource)]
 struct FileDropSource;
 
 #[cfg(windows)]
-impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource {
-    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: win_drag::MODIFIERKEYS_FLAGS) -> win_drag::HRESULT {
+impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource_Impl {
+    fn QueryContinueDrag(&self, fescapepressed: windows::Win32::Foundation::BOOL, grfkeystates: windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS) -> windows::core::HRESULT {
         if fescapepressed.as_bool() {
-            return win_drag::DRAGDROP_S_CANCEL;
+            return windows::Win32::Foundation::DRAGDROP_S_CANCEL;
         }
-        if (grfkeystates.0 & (win_drag::MK_LBUTTON | win_drag::MK_RBUTTON)) == 0 {
-            return win_drag::DRAGDROP_S_DROP;
+        let left_button = 0x0001u32;
+        let right_button = 0x0002u32;
+        if (grfkeystates.0 & (left_button | right_button)) == 0 {
+            return windows::Win32::Foundation::DRAGDROP_S_DROP;
         }
-        win_drag::S_OK
+        windows::Win32::Foundation::S_OK
     }
 
-    fn GiveFeedback(&self, _dweffect: win_drag::DROPEFFECT) -> win_drag::HRESULT {
-        win_drag::DRAGDROP_S_USEDEFAULTCURSORS
+    fn GiveFeedback(&self, _dweffect: windows::Win32::System::Ole::DROPEFFECT) -> windows::core::HRESULT {
+        windows::Win32::Foundation::DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
 
 #[cfg(windows)]
-fn duplicate_hglobal(hglobal: win_drag::HGLOBAL) -> windows::core::Result<win_drag::HGLOBAL> {
+unsafe fn global_free(hmem: windows::Win32::Foundation::HGLOBAL) {
+    extern "system" { fn GlobalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void; }
+    GlobalFree(hmem.0);
+}
+
+#[cfg(windows)]
+fn duplicate_hglobal(hglobal: windows::Win32::Foundation::HGLOBAL) -> windows::core::Result<windows::Win32::Foundation::HGLOBAL> {
     unsafe {
-        let size = win_drag::GlobalSize(hglobal);
-        let src = win_drag::GlobalLock(hglobal);
-        if src.is_null() { return Err(windows::core::Error::from_hresult(win_drag::E_FAIL)); }
+        let size = windows::Win32::System::Memory::GlobalSize(hglobal);
+        let src = windows::Win32::System::Memory::GlobalLock(hglobal);
+        if src.is_null() { return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL)); }
         
-        let dest_hglobal = win_drag::GlobalAlloc(win_drag::GMEM_MOVEABLE, size)?;
-        let dest = win_drag::GlobalLock(dest_hglobal);
+        let dest_hglobal = windows::Win32::System::Memory::GlobalAlloc(windows::Win32::System::Memory::GMEM_MOVEABLE, size)?;
+        let dest = windows::Win32::System::Memory::GlobalLock(dest_hglobal);
         if dest.is_null() {
-            let _ = win_drag::GlobalFree(dest_hglobal);
-            let _ = win_drag::GlobalUnlock(hglobal);
-            return Err(windows::core::Error::from_hresult(win_drag::E_FAIL));
+            global_free(dest_hglobal);
+            let _ = windows::Win32::System::Memory::GlobalUnlock(hglobal);
+            return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL));
         }
         
         std::ptr::copy_nonoverlapping(src, dest, size);
-        let _ = win_drag::GlobalUnlock(hglobal);
-        let _ = win_drag::GlobalUnlock(dest_hglobal);
+        let _ = windows::Win32::System::Memory::GlobalUnlock(hglobal);
+        let _ = windows::Win32::System::Memory::GlobalUnlock(dest_hglobal);
         Ok(dest_hglobal)
     }
 }
 
 #[cfg(windows)]
-fn create_hdrop(path: &std::path::Path) -> windows::core::Result<win_drag::HGLOBAL> {
+fn create_hdrop(path: &std::path::Path) -> windows::core::Result<windows::Win32::Foundation::HGLOBAL> {
     use std::os::windows::ffi::OsStrExt;
     let mut path_u16: Vec<u16> = path.as_os_str().encode_wide().collect();
     path_u16.push(0);
     path_u16.push(0); 
 
-    let size = std::mem::size_of::<win_drag::DROPFILES>() + path_u16.len() * 2;
+    let size = std::mem::size_of::<windows::Win32::UI::Shell::DROPFILES>() + path_u16.len() * 2;
     unsafe {
-        let hglobal = win_drag::GlobalAlloc(win_drag::GMEM_MOVEABLE | win_drag::GMEM_ZEROINIT, size)?;
-        let ptr = win_drag::GlobalLock(hglobal);
+        let hglobal = windows::Win32::System::Memory::GlobalAlloc(windows::Win32::System::Memory::GMEM_MOVEABLE | windows::Win32::System::Memory::GMEM_ZEROINIT, size)?;
+        let ptr = windows::Win32::System::Memory::GlobalLock(hglobal);
         if ptr.is_null() {
-            let _ = win_drag::GlobalFree(hglobal);
-            return Err(windows::core::Error::from_hresult(win_drag::E_FAIL));
+            global_free(hglobal);
+            return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL));
         }
-        
-        let dropfiles = ptr as *mut win_drag::DROPFILES;
-        (*dropfiles).pFiles = std::mem::size_of::<win_drag::DROPFILES>() as u32;
+
+        let dropfiles = ptr as *mut windows::Win32::UI::Shell::DROPFILES;
+        (*dropfiles).pFiles = std::mem::size_of::<windows::Win32::UI::Shell::DROPFILES>() as u32;
         (*dropfiles).fWide = windows::Win32::Foundation::BOOL(1); 
 
-        let path_ptr = (ptr as *mut u8).add(std::mem::size_of::<win_drag::DROPFILES>()) as *mut u16;
+        let path_ptr = (ptr as *mut u8).add(std::mem::size_of::<windows::Win32::UI::Shell::DROPFILES>()) as *mut u16;
         std::ptr::copy_nonoverlapping(path_u16.as_ptr(), path_ptr, path_u16.len());
 
-        let _ = win_drag::GlobalUnlock(hglobal);
+        let _ = windows::Win32::System::Memory::GlobalUnlock(hglobal);
         Ok(hglobal)
     }
 }
